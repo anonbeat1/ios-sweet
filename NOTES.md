@@ -279,6 +279,14 @@ Separate effort from sweet; sweet handoff below is unchanged.
     touch14 (GPII 0, NOP, page 2 after 5 s): `shim/out/spacewar-touch14-t2.img` = CONFIG0+GO+DMA chained (Linux order; on
     GPII 1 this froze, touch8 t2); `shim/out/spacewar-touch14-t3.img` = GO+DMA only, no CONFIG0 (SE already has 8-bit words
     and div 4 from the FIFO-mode init). Both continue to the boot-id read if the GO completes.
+    **touch14 result (19:33, photos): both images ended in CrashDump at points where the CPU only spun in udelay**:
+    one during the NOP step (NOP doorbell line was the last; NOPs always completed before), one in the 5 s pause before
+    page 2 (after the NOP had completed). => the CrashDump is an **asynchronous reset unrelated to the TRE being sent**;
+    the earlier freezes/CrashDumps (touch5/6, touch8 t1/t2) are probably the same event, not the GO. Source unknown
+    (watchdog? SMMU/GPI interrupt handled by hyp/TZ? rails/touch IC?).
+    touch15 bisection with a 10 s heartbeat for 3 min (time, SMMU cb7 FSR/GFSR, GPII irq|err, gpio81 io):
+    `shim/out/spacewar-touch15-t4.img` = rails + pins + SE13 clock only, no SMMU/GPI; `shim/out/spacewar-touch15-t5.img` =
+    SMMU cb7 + GPII 0 up + one NOP, then idle.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON

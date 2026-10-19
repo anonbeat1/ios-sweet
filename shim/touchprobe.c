@@ -662,10 +662,17 @@ static void gpi_debug_dump(void)
 #define TRE_GO_TX(n)		{ { 1, 0, 0, 2u << 20 | 1 } }		/* SPI_TX_ONLY, cs 0, chain */
 #define TRE_DMA_TX(n)		{ { (uint32_t)(uintptr_t)dma_tx, 0, n, 1u << 20 | 1u << 9 } }
 
+static void heartbeat(const char *what, int gsi);
+
 static void gsi_tests(void)
 {
 	static const struct tre nop[1] = { { { 0, 0, 0, 1u << 16 | 1u << 8 } } };
 	gsi_step("NOP", 1, nop);
+#if TOUCH_TEST == 5
+	con_clear(BLUE);
+	heartbeat("SMMU cb7 + GPII 0 up, one NOP done", 1);
+	return;
+#endif
 	dma_tx[0] = 0x55, dma_tx[1] = dma_tx[2] = dma_tx[3] = 0;
 	dc_civac(dma_tx, sizeof(dma_tx));
 	ts_reset(0);
@@ -707,10 +714,37 @@ static void gsi_tests(void)
 		con_str("FT3680", "boot id 0x5662: SPI over GPI works");
 }
 
+/*
+ * touch14: CrashDump arrived while the CPU only spun in udelay (once during
+ * the NOP step, once in the 5 s pause before page 2): an asynchronous reset,
+ * not a TRE. Heartbeat every 10 s for 3 min to time it and watch the state.
+ */
+static void heartbeat(const char *what, int gsi)
+{
+	con_str("BEAT", what);
+	for (unsigned t = 10; t <= 180; t += 10) {
+		udelay(10000000);
+		uint32_t fsr = 0, gpi = 0;
+		if (gsi) {
+			smmu_fault_report();
+			gpi = rd(G(0x23080)) << 16 | rd(G(0x23200));
+		}
+		(void)fsr;
+		char l[] = "t=000s";
+		l[2] = '0' + t / 100, l[3] = '0' + t / 10 % 10, l[4] = '0' + t % 10;
+		con_hex2(l, "gpi irq|err=", gpi, "gpio81 io=", rd(TLMM_GPIO(81) + 4));
+	}
+	con_str("BEAT", "3 min survived");
+}
+
 /* Returns 0 when transfers can go through the GPI. */
 static int touch_gsi_init(void)
 {
 	con_clear(BLUE);
+#if TOUCH_TEST == 4
+	heartbeat("rails + pins + SE13 clock only, no SMMU/GPI", 0);
+	return -1;
+#endif
 	con_str("TOUCH", "GSI path: SMMU cb + GPI DMA, GPII 0");
 	if (smmu_setup()) {
 		con_str("SMMU", "context bank not accepted: stop");
