@@ -247,6 +247,13 @@ Separate effort from sweet; sweet handoff below is unchanged.
     touch9 (`shim/out/spacewar-touch9-trace.img`, TOUCH_TEST 1): prints S5 RCG DFSR/PERF0 and SE CLK_SEL/M_CLK_CFG after
     CONFIG0, then after the GO doorbell prints a line (us since doorbell, ch0 rp, ev rp, GPII irq|gen, GENI status, M_IRQ)
     on every change, max 14 entries.
+    **touch9 result (19:18, photo)**: no freeze this time: S5 RCG DFSR 0x21 (DFS on), PERF0 0x1 (XO), SE CLK_SEL 0, M_CLK_CFG
+    0x41; after the GO doorbell one trace entry only (t 1182 us: ch0 rp on the GO 0xA00B1820, ev 0xA00B2020, irq 8, GENI 0,
+    M_IRQ 0), unchanged for 2 s, "test done". Same sequence as t1 (which froze): GO is never handed to the SE.
+    **Likely cause found**: SE13 `dmas = <gpi 0 5 1 0x40 2>`; the last cell 2 = STATIC_GPII_BMSK (msm_gpi.h) ->
+    gpi_find_avail_gpii() uses qcom,static-gpii-mask 0x1 = **GPII 0**, not GPII 1-4 (we used 1). Linux sets GPII 0 up the
+    same way (ALLOCATE/START). touch10 (`shim/out/spacewar-touch10-gpii0.img`): GPII 0 (stops if already allocated), NOP,
+    CONFIG0, GO TX 0x55 with trace, then if the GO completed a full-duplex boot-id read (0x90) with CRC check.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON

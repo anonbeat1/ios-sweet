@@ -313,7 +313,12 @@ void touch_bringup(void)
 #define SMMU		0x15000000UL			/* apps_smmu */
 #define GPI_SID		0x56
 #define GPI_EE		(0x00a00000UL - 0x10000UL)	/* gpi-top - ee-offset */
-#define GPII		1UL				/* first of qcom,gpii-mask 0x1e */
+/*
+ * SE13's dmas cells end in 2 = STATIC_GPII_BMSK (msm_gpi.h): Linux takes it
+ * from qcom,static-gpii-mask 0x1, i.e. GPII 0. On GPII 1 (touch5-9) NOP and
+ * CONFIG0 completed but a GO never reached the SE (or wedged the bus).
+ */
+#define GPII		0UL
 #define G(o)		(GPI_EE + (o) + 0x4000UL * GPII)
 #define CH_CTX(k)	G(0x20000 + 0x80 * (k))
 #define CH_DB(k)	G(0x22000 + 0x8 * (k))
@@ -451,6 +456,13 @@ static int gpi_setup(void)
 		tx_ring[i] = rx_ring[i] = ev_ring[i] = (struct tre){ { 0 } };
 	dc_civac(tx_ring, sizeof(tx_ring)), dc_civac(rx_ring, sizeof(rx_ring)), dc_civac(ev_ring, sizeof(ev_ring));
 
+	/* GPII 0 is the static (LE-VM) one: only take it if nobody allocated it */
+	con_hex2("GPII 0", "was ch0=", rd(CH_CTX(0)), "ev=", rd(EV_CTX));
+	if ((rd(CH_CTX(0)) | rd(CH_CTX(1)) | rd(EV_CTX)) & 0x00f00000u) {
+		con_str("GPII 0", "already allocated: stop");
+		return -1;
+	}
+
 	/* gpi_alloc_ev_chan: ALLOCATE, then program the context */
 	if (gpi_cmd(G(0x23010), 0, EV_CTX, 1, "EV ALLOC"))
 		return -1;
@@ -481,7 +493,7 @@ static int gpi_setup(void)
 	for (unsigned k = 0; k < 2; k++)
 		if (gpi_cmd(G(0x23008), 1u << 24 | k, CH_CTX(k), 2, k ? "CH1 START" : "CH0 START"))
 			return -1;
-	con_hex2("GPII 1", "ch0=", rd(CH_CTX(0)), "ch1=", rd(CH_CTX(1)));
+	con_hex2("GPII 0", "ch0=", rd(CH_CTX(0)), "ch1=", rd(CH_CTX(1)));
 	con_hex2(" ev", "ctx=", rd(EV_CTX), "rp=", rd(EV_CTX + 0x10));
 	return 0;
 }
@@ -527,25 +539,8 @@ static int gsi_xfer(const uint8_t *tx, uint8_t *rx, unsigned n)
 	}
 	ring_put(tx_ring, &tx_wp, 3, 0, n, 2u << 20 | 1u << 11 | 1);	/* GO full duplex, cs 0, link_rx, chain */
 	ring_put(tx_ring, &tx_wp, (uint32_t)(uintptr_t)dma_tx, 0, n, 1u << 20 | 1u << 9);	/* DMA_W_BUF, ieot */
-	/* touch5 crashed to CrashDump within the first transfer: step through the first one */
-	static int stepped;
-	if (!stepped) {
-		con_hex2("DB rx", "wp=", (uint32_t)(uintptr_t)&rx_ring[rx_wp], "in 3 s", 0);
-		udelay(3000000);
-	}
 	wr(CH_DB(1), (uint32_t)(uintptr_t)&rx_ring[rx_wp]);
-	if (!stepped) {
-		udelay(2000000);
-		gsi_dump("after rx");
-		con_hex2("DB tx", "wp=", (uint32_t)(uintptr_t)&tx_ring[tx_wp], "in 3 s", 0);
-		udelay(3000000);
-	}
 	wr(CH_DB(0), (uint32_t)(uintptr_t)&tx_ring[tx_wp]);
-	if (!stepped) {
-		udelay(2000000);
-		gsi_dump("after tx");
-		stepped = 1;
-	}
 
 	uint32_t want = (uint32_t)(uintptr_t)&rx_ring[rx_wp];
 	int rc = -1;
@@ -597,7 +592,7 @@ static void gsi_trace(unsigned us)
 	uint32_t last[6] = { ~0u, ~0u, ~0u, ~0u, ~0u, ~0u };
 	uint64_t t0 = ticks(), end = t0 + 192ULL * us / 10;
 	int lines = 0;
-	while (ticks() < end && lines < 14) {
+	while (ticks() < end && lines < 3) {
 		/* touch8 t1 froze without a dump: mark each register block before its first read */
 		if (lines == 0 && last[0] == ~0u)
 			con_str(" read", "GPI regs");
@@ -671,14 +666,28 @@ static void gsi_tests(void)
 	const struct tre all[3] = { TRE_CONFIG0(1), TRE_GO_TX(4), TRE_DMA_TX(4) };
 	gsi_step("C0+GO+DMA", 3, all);
 #endif
-	con_str("TOUCH", "test done");
+	if (rd(CH_CTX(0) + 0x10) != (uint32_t)(uintptr_t)&tx_ring[tx_wp]) {
+		con_str("TOUCH", "GO still pending: stop");
+		return;
+	}
+	/* 0x55 went out: read the boot id (fts_check_bootid) full duplex */
+	gsi_cfg_done = 1;
+	udelay(8000);
+	static const uint8_t rid[11] = { 0x90, 0xa0, 0x00, 0x02 };
+	uint8_t id[11] = { 0 };
+	int rc = gsi_xfer(rid, id, sizeof(rid));
+	uint16_t crc = crc16_kermit(&id[7], 2), got = (uint16_t)(id[10] << 8 | id[9]);
+	con_hex2("FT 0x90", "rc=", (uint32_t)rc, "st=", id[3]);
+	con_hex2("FT ID", "id=", id[7] << 8 | id[8], "crc ok=", crc == got);
+	if (rc == 0 && crc == got && id[7] == 0x56 && id[8] == 0x62)
+		con_str("FT3680", "boot id 0x5662: SPI over GPI works");
 }
 
 /* Returns 0 when transfers can go through the GPI. */
 static int touch_gsi_init(void)
 {
 	con_clear(BLUE);
-	con_str("TOUCH", "GSI path: SMMU cb + GPI DMA, GPII 1");
+	con_str("TOUCH", "GSI path: SMMU cb + GPI DMA, GPII 0");
 	if (smmu_setup()) {
 		con_str("SMMU", "context bank not accepted: stop");
 		return -1;
