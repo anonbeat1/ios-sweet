@@ -445,6 +445,7 @@ Separate effort from sweet; sweet handoff below is unchanged.
     keep unsent chunks (rewind pos on send failure) and log "SWEET NET: <proc> opened IONetworkStack" in the stack user
     client (proof InterfaceNamer saw the IOKit objects). Next boot: read the whole log for SWEET NET lines (publish, stack
     open, 0080's route/address trace from configd/IPConfiguration).
+    0093 CI 39323280304 success -> `xnu/out-0093`; image `shim/out/spacewar-xnu-0093-daily.img` (same cmdline as 0092-daily).
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
