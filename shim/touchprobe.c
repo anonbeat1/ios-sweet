@@ -406,7 +406,24 @@ static int smmu_setup(void)
 	con_hex2(" cb", "sctlr=", rd(cb), "cbar=", rd(gr1 + 4 * (unsigned)smmu_cb));
 	con_hex2(" cb", "tcr=", rd(cb + 0x30), "ttbr0=", rd(cb + 0x20));
 	con_hex2(" sid56", "smr=", rd(smr), "s2cr=", rd(s2cr));
-	return ((rd(s2cr) >> 16) & 3) == 0 && (rd(s2cr) & 0xff) == (uint32_t)smmu_cb && (rd(cb) & 1) ? 0 : -1;
+	int ok = ((rd(s2cr) >> 16) & 3) == 0 && (rd(s2cr) & 0xff) == (uint32_t)smmu_cb && (rd(cb) & 1);
+
+	/*
+	 * touch16: every GO that executed ended in CrashDump, GO-free runs
+	 * survive minutes. qupv3_1 (the wrapper) has iommus <0x43> and no SMR:
+	 * if the transfer emits that stream it is an unidentified-stream global
+	 * fault (USFCFG=1), maybe fatal under the hypervisor. Same cb for it.
+	 */
+	for (unsigned i = (unsigned)free_smr + 1; i < nsmr && i < 128; i++) {
+		if (rd(SMMU + 0x800 + 4 * i) & (1u << 31))
+			continue;
+		wr(SMMU + 0xc00 + 4 * i, (uint32_t)smmu_cb);
+		wr(SMMU + 0x800 + 4 * i, 1u << 31 | 0x43);
+		__asm__ volatile("dsb sy" ::: "memory");
+		con_hex2(" sid43", "smr=", rd(SMMU + 0x800 + 4 * i), "s2cr=", rd(SMMU + 0xc00 + 4 * i));
+		break;
+	}
+	return ok ? 0 : -1;
 }
 
 static void smmu_fault_report(void)
@@ -767,5 +784,8 @@ static int touch_gsi_init(void)
 		return -1;
 	}
 	gsi_tests();
+#if TOUCH_TEST <= 3
+	heartbeat("after the GO: does CrashDump follow?", 0);	/* one row per beat */
+#endif
 	return -1;	/* the boot-id loop waits for a working GO */
 }

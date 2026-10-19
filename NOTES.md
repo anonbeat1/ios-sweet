@@ -292,6 +292,16 @@ Separate effort from sweet; sweet handoff below is unchanged.
     the FT3680 reset (ts_reset 0 -> 1) shortly before (touch14: right after the NOP; touch5/6: start of the boot-id loop);
     t5 returns before that. Hypothesis: the FT3680 coming out of reset (its IRQ on gpio81?) triggers the reset.
     touch16 (`shim/out/spacewar-touch16-t6.img`): t5 + reset pulse released, heartbeat with gpio81 ctl/intr_cfg/io/status.
+    **touch16 result (19:42)**: t5 + FT3680 reset release alive at 110 s; gpio81 ctl 0xC3 (input, pull-up), intr_cfg 0xE2
+    (interrupt disabled, target 7), pin high, no status. Reset release is not the trigger.
+    **Re-reading all runs: every GO that actually executed ended in CrashDump** (touch5/6, touch8 t2, touch14 t2 chained and
+    t3 GO-only; the touch14 photos were probably taken before the reset), while runs whose GO stayed pending (after a
+    standalone CONFIG0: touch7, touch9-13) did not crash. => two facts: (a) a standalone CONFIG0 blocks every later TRE but
+    NOP; (b) executing a GO (SPI transfer) resets the SoC.
+    Hypothesis for (b), unverified: qupv3_1 wrapper `iommus = <0x43>` has no SMR; traffic on SID 0x43 during the transfer
+    = unidentified-stream global fault (USFCFG=1), fatal under the hypervisor. touch17
+    (`shim/out/spacewar-touch17-sid43.img`, TOUCH_TEST 2 = chained CONFIG0+GO+DMA on GPII 0): SID 0x43 also mapped to cb7
+    (next free SMR), then boot-id read and a 3 min heartbeat.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
