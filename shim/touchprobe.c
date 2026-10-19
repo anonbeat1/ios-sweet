@@ -5,6 +5,8 @@
  *
  * GCC branch CBCR bit 31 = CLK_OFF. The SE registers are only read when
  * every clock on their path is on: an unclocked access would hang the bus.
+ * Probe 2 (the only writes): vote SE13 + wrapper-1 AHB clocks on in the APCS
+ * branch vote register, as Linux does. No rail, pin or SE programming.
  */
 #include <stdint.h>
 #include "console.h"
@@ -16,6 +18,7 @@
 #define SE13		0x00a94000UL
 
 static inline uint32_t rd(uintptr_t a) { return *(volatile uint32_t *)a; }
+static inline void wr(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
 
 void test_touch(void)
 {
@@ -27,7 +30,7 @@ void test_touch(void)
 	uint32_t vote = rd(GCC + GCC_VOTE);
 	int all_on = 1;
 
-	con_str("TOUCH", "probe (read-only), FT3680 on SE13");
+	con_str("TOUCH", "probe 2 (clock vote only), FT3680 on SE13");
 	con_hex2("GCC", "vote=", vote, 0, 0);
 	for (int i = 0; i < 5; i++) {
 		uint32_t cbcr = rd(GCC + clk[i].cbcr);
@@ -43,7 +46,22 @@ void test_touch(void)
 		con_hex2(l, "ctl=", rd(TLMM_GPIO(pins[i])), "io=", rd(TLMM_GPIO(pins[i]) + 4));
 	}
 	if (!all_on) {
-		con_str("SE13", "a clock is off: SE registers not read");
+		wr(GCC + GCC_VOTE, vote | 1U << 27 | 1U << 21 | 1U << 20);
+		__asm__ volatile("dsb sy" ::: "memory");
+		all_on = 1;
+		for (int i = 0; i < 5; i++) {
+			uint32_t cbcr = 0;
+			for (int t = 0; t < 100000 && ((cbcr = rd(GCC + clk[i].cbcr)) & (1U << 31)); t++)
+				;
+			if (cbcr & (1U << 31))
+				all_on = 0;
+		}
+		con_hex2("VOTED", "vote=", rd(GCC + GCC_VOTE), "all_on=", all_on);
+		con_hex2(" se13", "cbcr=", rd(GCC + 0x185fc), "sahb=", rd(GCC + 0x18008));
+	}
+	con_hex2("RCG s5", "cmd=", rd(GCC + 0x18600), "cfg=", rd(GCC + 0x18604));
+	if (!all_on) {
+		con_str("SE13", "a clock is still off: SE registers not read");
 		return;
 	}
 	/* GENI: FW_REVISION_RO [15:8] protocol (1 SPI, 2 UART, 3 I2C), [7:0] version */
