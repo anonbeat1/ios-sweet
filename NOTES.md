@@ -150,6 +150,8 @@ Separate effort from sweet; sweet handoff below is unchanged.
     xnu 0087, image ios16-root-20H392-spacewar). Reached after the LaunchServices reseed; user
     saw a CRASH line scroll by (not identified; sweet had mobileactivationd/installcoordinationd/mediaserverd loops).
     Touch and buttons are off (sweettouch=0 sweetkeys=0: sweet's Goodix-I2C/PM6150 drivers do not apply) -> cannot unlock yet.
+    Lock screen photo (user, 2026-10-19): "Wednesday, December 31 4:17" = clock near the Unix epoch (no RTC read; PMK8350
+    RTC over SPMI would fix it), battery = static 100% charging fallback, camera button + home indicator drawn.
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
     over SPMI (same arbiter as sweet, new PPID/APID); (3) touch: Focaltech 0x5662 on SPI (QUP SE @0xa94000, irq gpio 417,
     reset gpio 441) with the 119284-byte firmware upload from fts_tp.ko; (4) identify the crash loops.
