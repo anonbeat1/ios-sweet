@@ -241,6 +241,9 @@ Separate effort from sweet; sweet handoff below is unchanged.
     doorbell in 3 s" and **no crash (user): the screen froze there, the "->" dump never appeared** => after a TX-only GO
     the CPU most likely hangs on an MMIO read in the dump (GPI ch/ev RP or SE13 GENI registers: bus stall), whereas
     touch7's full-duplex GO stalled with readable registers. touch6's CrashDump may be the same stall ending in a bite.
+    **touch8 t2 result (19:16, photo)**: chained CONFIG0+GO+DMA (Linux order): NOP ok, then frozen on "C0+GO+DMATX doorbell
+    in 3 s" with no dump, **then CrashDump** => same as t1: an executing GO wedges a register read, and the stall later
+    ends in CrashDump (bus timeout or watchdog; t1 may have done the same with more waiting).
     touch9 (`shim/out/spacewar-touch9-trace.img`, TOUCH_TEST 1): prints S5 RCG DFSR/PERF0 and SE CLK_SEL/M_CLK_CFG after
     CONFIG0, then after the GO doorbell prints a line (us since doorbell, ch0 rp, ev rp, GPII irq|gen, GENI status, M_IRQ)
     on every change, max 14 entries.
