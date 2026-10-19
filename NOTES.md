@@ -21,8 +21,13 @@ Separate effort from sweet; sweet handoff below is unchanged.
   - RAM low bank reserved: hyp@0x80000000, ... mpss to 0x9d300000, wlan 0x9ae00000+0x1900000, ramoops 0xa9000000,
     removed 0xc0000000+0x5100000, trustedvm 0xd0800000.., splash 0xe1000000.., dfps 0xe3300000+0x100000.
     Candidate gaps: 0xa9200000-0xc0000000, 0xe3400000-0x100000000; high bank unknown (need live /proc/iomem / live FDT).
-- Next: (1) confirm `fastboot getvar unlocked`; (2) `fastboot boot` stock boot.img to prove temp boot works on this ABL;
-  (3) shim v3 boot image that colours the splash fb + tries a cmd-mode kick; (4) temp root (Magisk-patched boot via fastboot boot)
+- 2026-10-19 results: `fastboot getvar unlocked` = yes (slot b). `fastboot boot` of stock boot.img: OK (Android came up).
+  **Probe 1** (`shim/spacewar.c`, `shim/build-spacewar.sh` on macOS clang+lld, `tools/mkbootimg_v3.py`, commit c18860f):
+  ABL ran it; user saw **text on dark-green background** => our code runs at entry, an SSPP scans out of the splash region,
+  format is 1080x2400 32 bpp stride 4320, and writing CTL_START on the active CTL refreshes the cmd-mode panel. Screen = debug channel.
+  Register values from the photo: (pending).
+  Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
+- Next: (4) temp root (Magisk-patched boot via fastboot boot)
   to pull live FDT, /proc/iomem and partition backups (persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots).
 
 ## Agent handoff / active work (2026-10-15, latest)
