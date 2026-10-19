@@ -11,6 +11,9 @@
 #include "mmu.h"
 #include "loader.h"
 #include "ufs.h"
+#ifdef SPACEWAR
+#include "spacewar.h"
+#endif
 
 #define IMEM_RESTART_REASON	0x146aa65cUL	/* qcom,msm-imem restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
@@ -167,6 +170,10 @@ static uintptr_t find_gicr(void);
 
 void secondary_main(uint64_t idx)
 {
+#ifdef SPACEWAR
+	if (idx == SW_KICK_CPU)
+		sw_kick_loop();
+#endif
 	sec_mpidr[idx] = rsr("mpidr_el1") | (1ULL << 63);
 	if (idx == 1) {
 		uintptr_t r = find_gicr();
@@ -374,6 +381,25 @@ void shim_main(uint64_t dtb)
 {
 	struct mmu_info mi;
 
+#ifdef SPACEWAR
+	/* Probe 2. A cmd-mode panel needs kicks: CPU7 does them from here on. */
+	stage = "display";
+	if (sw_display_init() == -1 || !sw_ctl)
+		reset(10);	/* nothing on screen: a ~10 s reboot means "no scanout pipe" */
+	smc(PSCI_CPU_ON, (uint64_t)SW_KICK_CPU << 8, (uintptr_t)secondary_entry, SW_KICK_CPU);
+	con_clear(RED);
+	con_str("SHIM", "spacewar probe 2, page 1/2");
+	con_hex2("DTB", "at=", dtb, "magic=", dtb ? __builtin_bswap32(rd32(dtb)) : 0);
+	con_hex2("MIDR", "cpu0=", rsr("midr_el1"), "el=", rsr("CurrentEL") >> 2);
+	con_hex2("CNTFRQ", "hz=", rsr("cntfrq_el0"), 0, 0);
+	con_skip();
+	sw_display_dump();
+	con_skip();
+	test_smp();	/* CPU7 already runs the kick loop: expect ALREADY_ON */
+	con_skip();
+	con_str("PAGE 2", "in 45s");
+	delay_ms(45000);
+#else
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
 	stage = "loader";
 	con_clear(RED);
@@ -391,6 +417,7 @@ void shim_main(uint64_t dtb)
 	con_str("UFS", "probe done, reset in ~3 min");
 	delay_ms(180000);
 	reset(20);
+#endif
 
 	stage = "fill off";
 	uint64_t fill_off = ticks_fill(RED);
@@ -405,7 +432,11 @@ void shim_main(uint64_t dtb)
 	if (rc)
 		con_clear(RED);
 
+#ifndef SPACEWAR
 	con_str("SHIM", "sweet milestone 3");
+#else
+	con_str("SHIM", "spacewar probe 2, page 2/2");
+#endif
 	con_skip();
 	con_hex2("DTB", "at=", dtb, "magic=", dtb ? __builtin_bswap32(rd32(dtb)) : 0);
 	con_hex2("IMAGE", "lo=", mi.img_lo, "hi=", mi.img_hi);
@@ -431,5 +462,9 @@ void shim_main(uint64_t dtb)
 	test_gic();
 
 	stage = "done";
+#ifdef SPACEWAR
+	con_str("DONE", "reset in ~3 min");
+	delay_ms(140000);
+#endif
 	reset(40);
 }
