@@ -682,6 +682,10 @@ static void gsi_tests(void)
 	 * (setup_lock_tre: LOCK TRE, IEOB) before the GO, as shared_se does.
 	 */
 	static const struct tre lock[1] = { { { 0, 0, 0, 3u << 20 | 0u << 16 | 1u << 8 } } };
+	con_str("TOUCH", "page 2 in 5 s (NOP + CONFIG0 done)");
+	udelay(5000000);
+	con_clear(BLUE);
+	con_hex2("TOUCH", "page 2: ch0 rp=", rd(CH_CTX(0) + 0x10), "m_clk=", rd(SE(0x48)));
 	gsi_step("LOCK", 1, lock);
 	const struct tre go[2] = { TRE_GO_TX(4), TRE_DMA_TX(4) };
 	gsi_step("GO+DMA", 2, go);
