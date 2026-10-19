@@ -171,6 +171,14 @@ Separate effort from sweet; sweet handoff below is unchanged.
   - **Touch probes** (shim, `shim/touchprobe.c`): after ABL the SE13 clock is off and gpio52-55/81/105 are plain GPIO inputs
     with pull-down (ctl 0x1, io 0). Voting bits 27/21/20 turns SE13 on; then **SE13 FW_REVISION_RO = 0x0102 (protocol 1 = SPI
     firmware already loaded by boot)**, GENI status 0, m_clk_cfg 0x11, irq_en 0x33C0007E. No bus hang.
+  - **Handoff 2026-10-19 18:35**: 0088 CI 39282672505 success -> `xnu/out-0088`, image `shim/out/spacewar-xnu-0088-keys.img`
+    (cpus=8, console on, keys on) booted ~18:3x; keys/RTC result NOT yet reported by the user.
+    Touch shim bring-up (`shim/touchprobe.c` touch_bringup, `shim/rpmh.c`): ldoc8 1800 mV and ldoc3 3300 mV votes OK
+    (cmd-db addr 0x42500 / 0x40E00); SE13 hw0 0x20102864 (FIFO 16 x 32 bit). FIFO transfers stall: run 1 (CS_ASSERT,
+    FULL_DUPLEX+FRAGMENTATION, CS_DEASSERT) hung in DEASSERT; run 2 (single FULL_DUPLEX, engine CS) hung at once (M_IRQ 0,
+    GENI_STATUS 0x41, cancel/abort ineffective). The DT compatible "qcom,spi-geni" = downstream spi-msm-geni.c (no set_cs,
+    gsi_mode = GENI_IF_DISABLE_RO bit0). Hypothesis: SE13 firmware is in GSI mode (FIFO interface disabled) -> needs GPI DMA.
+    `shim/out/spacewar-touch3.img` (ec0d1d4) prints GENI_IF_DISABLE_RO and stops if set: NOT yet booted.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
