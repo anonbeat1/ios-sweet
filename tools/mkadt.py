@@ -55,6 +55,10 @@ SPACEWAR_RTC_BASE, SPACEWAR_RTC_OFFSET_MS = 0x6100, 0x01a15422972b
 # qcom,cpufreq-hw-epss freq-domain0/1/2 = A55 / A78 / prime). ABL leaves the
 # A78 and prime domains at LUT row 0 (691 / 806 MHz); the kernel requests the top row.
 SPACEWAR_EPSS = (0x18591000, 0x1000, 0x18592000, 0x1000, 0x18593000, 0x1000)
+# USB (bsd/dev/sweet_usb.c): SM7325 gcc-yupik offsets differ from sweet's
+# gcc-sdmmagpie, the HS PHY is snps-femto (no QUSB2 block), and the DWC3 is
+# behind apps_smmu stream 0xe0 (live DT ssusb iommus <0x1a 0xe0>).
+SPACEWAR_USB = dict(gdscr_off=0x10f004, master_off=0x0f010, cfgnoc_off=0x0f07c, smmu_sid=0xe0)
 
 BOOT_MANIFEST_HASH = hashlib.sha384(b'sweet boot manifest').digest()
 
@@ -241,6 +245,8 @@ def build(seed=None, qemu=False, highmem=False, spacewar=False, ft_fw=None):
             fts_props.append(('firmware', ft_fw))
         rpmh.append(node('sweet-fts-spi', fts_props))
         rpmh.append(node('sweet-cpufreq', [ph(), ('reg', u64(*SPACEWAR_EPSS))]))
+        rpmh.append(node('sweet-usb', [ph(), ('no-qusb2', u32(1))] +
+                         [(k.replace('_', '-'), u32(v)) for k, v in SPACEWAR_USB.items()]))
 
     # pmap_compute_max_asids requires the node even when no overrides are set.
     # An absent pmap-max-asids property selects XNU's own MAX_ASIDS default.

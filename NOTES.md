@@ -368,6 +368,15 @@ Separate effort from sweet; sweet handoff below is unchanged.
     Boot-args sweetcpufreq=0 (keep ABL levels), sweetcpulevel=N (cap the row). Thermal: hardware LMh/DCVSH still clamps.
     0090 CI 39302661918 success -> `xnu/out-0090`; image `shim/out/spacewar-xnu-0090-fast.img` (ADT `shim/out/sweet-0090sw.adt` =
     0089 nodes + /sweet-cpufreq, same cmdline as 0089-fast). NOT booted yet: expect "SWEET CPUFREQ: domain 1 level 0 -> 9".
+  - **USB networking port to Spacewar (patch 0091, `0091-sweet-spacewar-usb-net-smmu.patch`, applies on 0090, syntax-checked;
+    NOT built/booted)**: new shared `bsd/dev/sweet_smmu.c` — `sweet_smmu_map_sid(sid)` builds one translating stage-1 apps_smmu
+    context bank (identity map of DRAM, SIDs by free SMR, same recipe as the touch driver) lazily and maps a stream to it;
+    needed because the Spacewar DWC3 is behind apps_smmu (live DT ssusb `iommus <0x1a 0xe0>`), unlike sweet. `sweet_usb.c`
+    parameterised via ADT /sweet-usb: gdscr-off (yupik GDSC 0x10f004 vs sweet 0xf004), master-off/cfgnoc-off (clock gates at
+    different GCC offsets), smmu-sid (0xe0 -> sweet_smmu_map_sid before the gadget's first DMA), no-qusb2 (Spacewar HS PHY is
+    snps-femto, no QUSB2 block to probe). sweet has no /sweet-usb node -> byte-identical behaviour. mkadt --spacewar adds the
+    node. Boot with sweetusb=2 to start the CDC-ECM gadget; host side needs the macOS equivalent of tools/sweet-usbnet.sh
+    (CDC-ECM iface, 192.168.7.1/24, UDP log on :5140). DWC3 bring-up will likely need hardware iteration like the touch did.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
