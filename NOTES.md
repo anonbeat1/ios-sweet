@@ -366,6 +366,8 @@ Separate effort from sweet; sweet handoff below is unchanged.
     row on every domain of ADT /sweet-cpufreq "reg" (base,size pairs; mkadt --spacewar adds the 3 EPSS domains), called first
     in sweet_ufs_init (earliest SWEET BSD hook, before the root mount). Logs "SWEET CPUFREQ: domain d level a -> b (MHz)".
     Boot-args sweetcpufreq=0 (keep ABL levels), sweetcpulevel=N (cap the row). Thermal: hardware LMh/DCVSH still clamps.
+    0090 CI 39302661918 success -> `xnu/out-0090`; image `shim/out/spacewar-xnu-0090-fast.img` (ADT `shim/out/sweet-0090sw.adt` =
+    0089 nodes + /sweet-cpufreq, same cmdline as 0089-fast). NOT booted yet: expect "SWEET CPUFREQ: domain 1 level 0 -> 9".
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
