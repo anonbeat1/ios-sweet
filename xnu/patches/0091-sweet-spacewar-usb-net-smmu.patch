@@ -216,7 +216,7 @@ index 000000000000..159863ef5940
 +}
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
-index b6c1a41ba737..cc5bb1c0d499 100644
+index b6c1a41ba737..166ac1cce9d4 100644
 --- a/bsd/dev/sweet_usb.c
 +++ b/bsd/dev/sweet_usb.c
 @@ -36,17 +36,58 @@
@@ -342,3 +342,17 @@ index b6c1a41ba737..cc5bb1c0d499 100644
  	if (kmem_alloc_contig(kernel_map, &ud.dma, UD_SIZE, PAGE_MASK, 0, 0,
  	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
  		printf("SWEET USB: no DMA memory\n");
+@@ -864,9 +929,13 @@ sweet_usb_gadget_start(vm_offset_t dwc)
+ 		return;
+ 	}
+ 	ud.dma_pa = ptoa_64(pn);
++	printf("SWEET USB: DMA at 0x%llx, creating ue0\n", ud.dma_pa);
+ 	ud_if_create();
++	printf("SWEET USB: ue0 created; GCTL 0x%08x DCTL 0x%08x DSTS 0x%08x before reset\n",
++	    dwc_rd(GCTL), dwc_rd(DCTL), dwc_rd(DSTS));
+ 
+ 	/* Device controller soft reset (PHY and global setup stay as ABL left them). */
++	printf("SWEET USB: soft reset...\n");
+ 	dwc_wr(DCTL, DCTL_CSFTRST);
+ 	int i;
+ 	for (i = 0; i < 500 && (dwc_rd(DCTL) & DCTL_CSFTRST); i++) {
