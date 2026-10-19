@@ -395,7 +395,11 @@ void shim_main(uint64_t dtb)
 	con_str("SHIM", "spacewar: xnu loader");
 	con_skip();
 	con_str("LOADER", loader_boot(dtb));	/* returns only without a payload */
-	delay_ms(5000);
+	con_skip();
+	stage = "ufs";
+	test_ufs();	/* read-only; MMU off, right after ABL */
+	con_str("UFS", "probe done, pages in 60s");
+	delay_ms(60000);
 
 	stage = "page 1";
 	con_clear(RED);

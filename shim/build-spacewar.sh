@@ -6,7 +6,7 @@ PATH=/opt/homebrew/opt/lld/bin:$PATH
 CC="clang --target=aarch64-none-elf"
 CFLAGS="-DSPACEWAR -O2 -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -mstrict-align -fno-stack-protector -fno-jump-tables -Wall -Wextra"
 mkdir -p out/sw
-SRCS="start.S shim.c console.c mmu.c fdt.c loader.c"
+SRCS="start.S shim.c console.c mmu.c fdt.c loader.c ufs.c"
 OBJS=$(for f in $SRCS; do echo out/sw/${f%.*}.o; done)
 for f in $SRCS; do
 	$CC $CFLAGS -c $f -o out/sw/${f%.*}.o

@@ -142,6 +142,14 @@ static uint32_t read_blocks(uint32_t lba, uint32_t count, void *buf)
 	return scsi(0, cdb, sizeof(cdb), buf, count * BLOCK, &ocs, &st);
 }
 
+/* No libc: clang lowers __builtin_strcmp to a strcmp call. */
+static int streq(const char *a, const char *b)
+{
+	while (*a && *a == *b)
+		a++, b++;
+	return *a == *b;
+}
+
 static uint64_t le64(const uint8_t *p)
 {
 	uint64_t v = 0;
@@ -186,8 +194,7 @@ static void list_partitions(uint32_t entry_lba, uint32_t nent)
 		if (((last - first + 1) >> 8) < 64)	/* keep the screen to the big ones */
 			continue;
 		con_hex2(name, "lba=", (uint32_t)first, "MiB=", (uint32_t)((last - first + 1) >> 8));
-		if (!__builtin_strcmp(name, "userdata") || !__builtin_strcmp(name, "cust") ||
-		    !__builtin_strcmp(name, "cache"))
+		if (streq(name, "userdata") || streq(name, "cust") || streq(name, "cache"))
 			con_str(" fs", fs_type((uint32_t)first));
 	}
 }
@@ -230,17 +237,28 @@ void test_ufs(void)
 
 	uint32_t ocs = 0, st = 0, rc;
 	static const uint8_t tur[6] = { 0x00 };
-	/* A first command may report a unit attention; retry a few times. */
-	for (int i = 0; i < 3; i++) {
+	/*
+	 * A first command may report a unit attention. Spacewar: NOT READY
+	 * 2/04/02 until START STOP UNIT (ACTIVE) reaches the UFS Device W-LU.
+	 */
+	for (int i = 0; i < 10; i++) {
 		rc = scsi(0, tur, sizeof(tur), 0, 0, &ocs, &st);
-		con_hex2("UFS TUR", "rc=", rc, "ocs/st=", ocs << 8 | st);
+		const uint8_t *sense = &ucd.resp[34];	/* fixed-format autosense */
+		con_hex2("UFS TUR", "rc=", rc, "sense=", (sense[2] & 0xf) << 16 | sense[12] << 8 | sense[13]);
 		if (!rc)
 			break;
+		if ((sense[2] & 0xf) == 2) {
+			static const uint8_t ssu[6] = { 0x1b, 0, 0, 0, 0x10, 0 };
+			rc = scsi(0xd0, ssu, sizeof(ssu), 0, 0, &ocs, &st);
+			con_hex2("UFS SSU", "rc=", rc, "ocs/st=", ocs << 8 | st);
+		}
 	}
 
 	static const uint8_t cap10[10] = { 0x25 };	/* READ CAPACITY(10) */
 	rc = scsi(0, cap10, sizeof(cap10), data, 8, &ocs, &st);
 	con_hex2("UFS CAP", "rc=", rc, "ocs/st=", ocs << 8 | st);
+	if (rc == 1)	/* timeout: what did the host see? */
+		con_hex2("UFS CAP", "is=", ufs_rd(REG_IS), "ocs=", utrl[0].dw2 & 0xff);
 	if (!rc)
 		con_hex2("UFS LUN0", "lastlba=", be32(data), "blk=", be32(data + 4));
 
