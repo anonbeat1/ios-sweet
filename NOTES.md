@@ -135,6 +135,11 @@ Separate effort from sweet; sweet handoff below is unchanged.
     0x80860000+0x20000 (no AOP locator).
   - xnu 0087: sweet_rpmh accepts ldob7 2504..2952 mV and takes cmd-db from ADT /sweet-rpmh; sweet_ufs votes the rail named by
     ADT /sweet-ufs vcc-rpmh/vcc-mv before talking to the device. mkadt --spacewar: ldob7 2952 mV + cmd-db node.
+  - **MILESTONE (2026-10-19 17:14, run 39274891967, `shim/out/spacewar-xnu-0087-root.img`, cpus=1): the ldob7 VCC vote fixed
+    UFS; the iOS root mounted from userdata and userland came up to SpringBoard** (user saw `SMP SpringBoard t3` sampler
+    lines = SpringBoard alive). Very slow: cpus=1 + kernel console drawn over the GUI. Hypothesis confirmed by result only
+    (no rail readback): ABL leaves UFS VCC off after powering the device down.
+  - Next boot: cpus=8 sweetfb_noconsole=1 (drop -enable_kprintf_spam) like the sweet README.
   - Never press START in ABL's fastboot menu now: Android would find a non-f2fs userdata and may offer to format it.
   Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
   Partition backups to take: persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots.
