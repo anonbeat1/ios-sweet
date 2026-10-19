@@ -267,6 +267,12 @@ Separate effort from sweet; sweet handoff below is unchanged.
     touch12 (`shim/out/spacewar-touch12-dbg.img`): events returned to the ring + IEOB cleared after each step (like
     gpi_process_events); if the GO stays pending, dumps GPI debug (gpi-top +0x5048 PC x4, SW_RF 10/11/12/21, QSB log,
     ch0 WP/R_LENGTH).
+    **touch12 result (19:27, photo)**: IEOB clear + event recycling work (irq 0), GO still pending. GPI debug: **PC 0x547 on
+    all 4 reads** (parked/waiting, no error), SW_RF10/11 0, RF12 0x00800000, RF21 0x00C00000, QSB_LOG_0 0xA00B341C (last
+    QSB address = the CONFIG0 event write), QSB_LOG_1 0x02304000, QSB_LOG_2 0x80, ERR_TRNS_ID 1 (meaning unknown; QSB_LOG_SEL
+    not set), ch0 WP 0xA00B2C40 (doorbell seen), R_LENGTH 0x400.
+    touch13 (`shim/out/spacewar-touch13-lock.img`): hypothesis (unverified) SE13 firmware is multi-EE locked (trusted touch),
+    so the GO needs a LOCK TRE (major 3 minor 0, IEOB) first: NOP, CONFIG0, LOCK, GO+DMA, then boot-id read if it worked.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON

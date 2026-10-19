@@ -592,7 +592,7 @@ static void gsi_trace(unsigned us)
 	uint32_t last[6] = { ~0u, ~0u, ~0u, ~0u, ~0u, ~0u };
 	uint64_t t0 = ticks(), end = t0 + 192ULL * us / 10;
 	int lines = 0;
-	while (ticks() < end && lines < 3) {
+	while (ticks() < end && lines < 2) {
 		/* touch8 t1 froze without a dump: mark each register block before its first read */
 		if (lines == 0 && last[0] == ~0u)
 			con_str(" read", "GPI regs");
@@ -676,7 +676,13 @@ static void gsi_tests(void)
 	wr(SE(0x268), (rd(SE(0x268)) & ~0x3ffu) | 0x1f);	/* bogus word len: CONFIG0 should set 4 */
 	gsi_step("CONFIG0", 1, c0);
 	/* RCG DFS (clk-rcg2.c: CMD_DFSR +0x14, PERF_DFSR(0) +0x1c) and what CONFIG0 left in the SE */
-	con_hex2("SE13", "clk_sel=", rd(SE(0x7c)), "m_clk=", rd(SE(0x48)));
+	/*
+	 * touch12: GO pending with the GPI PC parked at 0x547 and the doorbell
+	 * seen (ch0 WP). SE13 is the trusted-touch SE: try taking the SE lock
+	 * (setup_lock_tre: LOCK TRE, IEOB) before the GO, as shared_se does.
+	 */
+	static const struct tre lock[1] = { { { 0, 0, 0, 3u << 20 | 0u << 16 | 1u << 8 } } };
+	gsi_step("LOCK", 1, lock);
 	const struct tre go[2] = { TRE_GO_TX(4), TRE_DMA_TX(4) };
 	gsi_step("GO+DMA", 2, go);
 #else
