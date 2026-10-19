@@ -127,6 +127,14 @@ Separate effort from sweet; sweet handoff below is unchanged.
     last LBA 0x1C457FF, 4096-byte blocks = LUN 0 / sda, 113 GB); **READ(10) 2 blocks timed out (1 s)**. So the DMA data path
     works; media reads hang. Hypothesis (unverified): device still finishing the wake from Power Down (after a 16 GB write).
     Probe 2 (50e0722): 10 s timeouts, SSU duration in ms, READ retried 6x with timing.
+  - Probe 2 (17:01): SSU OK in 1744 ms; TUR OK; READ CAPACITY OK; **READ(10) times out every time at 10 s** (is 0x401, ocs 0xF).
+    => media access hangs while the device controller answers. Hypothesis (unverified): ABL powered the device down and
+    cut **VCC (flash supply) = pm7325 L7B "ldob7"** (live DT ufshc: vcc-supply L7B, vcc-voltage-level <2504000 2952000>,
+    vcc-max-microamp 800 mA; vccq-supply L9B "ldob9" 1.2 V; vdd-hba = gcc_ufs_phy_gdsc). Spacewar apps RSC is identical to
+    sweet's (drv2 0x18220000, tcs-offset 0xd00, tcs-config ACTIVE 2/SLEEP 3/WAKE 3) but cmd-db is reserved-memory
+    0x80860000+0x20000 (no AOP locator).
+  - xnu 0087: sweet_rpmh accepts ldob7 2504..2952 mV and takes cmd-db from ADT /sweet-rpmh; sweet_ufs votes the rail named by
+    ADT /sweet-ufs vcc-rpmh/vcc-mv before talking to the device. mkadt --spacewar: ldob7 2952 mV + cmd-db node.
   - Never press START in ABL's fastboot menu now: Android would find a non-f2fs userdata and may offer to format it.
   Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
   Partition backups to take: persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots.

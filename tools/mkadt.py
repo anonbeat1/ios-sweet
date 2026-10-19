@@ -38,6 +38,10 @@ QEMU_VTIMER_INTID = 27
 # on its own) at 0xE1000000; standard timer PPIs (vtimer INTID 27).
 SPACEWAR_PHYS_BASE, SPACEWAR_MEM_SIZE = 0xe4000000, 0xfc000000
 SPACEWAR_FB = 0xe1000000
+# UFS VCC (flash supply): live DT ufshc vcc-supply = pm7325_l7 "ldob7",
+# vcc-voltage-level <2504000 2952000>. ABL leaves it unusable (media reads hang).
+SPACEWAR_UFS_VCC, SPACEWAR_UFS_VCC_MV = 'ldob7', 2952
+SPACEWAR_CMD_DB = (0x80860000, 0x20000)  # reserved-memory cmd_db, qcom,cmd-db
 
 BOOT_MANIFEST_HASH = hashlib.sha384(b'sweet boot manifest').digest()
 
@@ -201,7 +205,9 @@ def build(seed=None, qemu=False, highmem=False, spacewar=False):
         ph(),
         ('compatible', cstr('qcom,ufshc')),
         ('reg', u64(UFS, UFS_SIZE)),
-    ])
+    ] + ([('vcc-rpmh', cstr(SPACEWAR_UFS_VCC)), ('vcc-mv', u32(SPACEWAR_UFS_VCC_MV))] if spacewar else []))
+    # bsd/dev/sweet_rpmh.c: cmd-db without the AOP locator (Spacewar).
+    rpmh = [node('sweet-rpmh', [ph(), ('cmd-db', u64(*SPACEWAR_CMD_DB))])] if spacewar else []
 
     # pmap_compute_max_asids requires the node even when no overrides are set.
     # An absent pmap-max-asids property selects XNU's own MAX_ASIDS default.
@@ -233,7 +239,7 @@ def build(seed=None, qemu=False, highmem=False, spacewar=False):
         ('manufacturer', cstr('Apple Inc.')),
         ('#address-cells', u32(2)),
         ('#size-cells', u32(2)),
-    ], [chosen, defaults, cpus, arm_io, fbcon, buttons] + product + ([] if qemu else [ufs]))
+    ], [chosen, defaults, cpus, arm_io, fbcon, buttons] + product + ([] if qemu else [ufs]) + rpmh)
 
 
 if __name__ == '__main__':

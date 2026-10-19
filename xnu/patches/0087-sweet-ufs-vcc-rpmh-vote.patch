@@ -1,0 +1,91 @@
+diff --git a/bsd/dev/sweet_rpmh.c b/bsd/dev/sweet_rpmh.c
+index 4da50d8..0b7399a 100644
+--- a/bsd/dev/sweet_rpmh.c
++++ b/bsd/dev/sweet_rpmh.c
+@@ -9,6 +9,7 @@
+ #include <sys/errno.h>
+ #include <kern/clock.h>
+ #include <machine/machine_routines.h>
++#include <pexpert/device_tree.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
+@@ -129,9 +130,22 @@ rh_map(void)
+ 		return ENODEV;
+ 	}
+ 	if (!rh_db) {
+-		uint32_t pa = rh_read(rh_dict, 0);
+-		uint32_t size = rh_read(rh_dict, 4);
+-		printf("SWEET RPMH: cmd-db locator=%#x pa=%#x size=%#x\n", RH_DICT_PA, pa, size);
++		uint32_t pa, size;
++		DTEntry node;
++		const uint64_t *reg;
++		unsigned int reg_size;
++		/* Spacewar: cmd-db is a reserved-memory region (ADT /sweet-rpmh cmd-db), no locator. */
++		if (SecureDTLookupEntry(NULL, "/sweet-rpmh", &node) == kSuccess &&
++		    SecureDTGetProperty(node, "cmd-db", (void const **)&reg, &reg_size) == kSuccess &&
++		    reg_size == 2 * sizeof(uint64_t) && reg[0] <= UINT32_MAX && reg[1] <= UINT32_MAX) {
++			pa = (uint32_t)reg[0];
++			size = (uint32_t)reg[1];
++			printf("SWEET RPMH: cmd-db from ADT pa=%#x size=%#x\n", pa, size);
++		} else {
++			pa = rh_read(rh_dict, 0);
++			size = rh_read(rh_dict, 4);
++			printf("SWEET RPMH: cmd-db locator=%#x pa=%#x size=%#x\n", RH_DICT_PA, pa, size);
++		}
+ 		/* Firmware supplies the reserved RAM address; never scan physical RAM. */
+ 		if (pa < 0x80000000u || (pa & 3u) || (size & 3u) ||
+ 		    size < RH_DB_HEADER || size > RH_DB_MAX ||
+@@ -320,16 +334,20 @@ rh_send(uint32_t address, unsigned mv)
+ 		return EIO;
+ 	}
+ 	rh_poisoned = false;
+-	printf("SWEET RPMH: L11C ACTIVE vote complete (rail voltage requires hardware verification)\n");
++	printf("SWEET RPMH: ACTIVE vote complete (rail voltage requires hardware verification)\n");
+ 	return 0;
+ }
+ 
+ int
+ sweet_rpmh_vreg_enable(const char *res, unsigned mv)
+ {
+-	/* Board-specific helper: do not apply PMIC5-LDO policy to arbitrary resources. */
+-	if (!res || strcmp(res, "ldoc11") || mv < 2950 || mv > 3400) {
+-		printf("SWEET RPMH: expected ldoc11 and 2950..3400 mV\n");
++	/*
++	 * Board-specific helper: do not apply PMIC5-LDO policy to arbitrary resources.
++	 * sweet: touch L11C. Spacewar: UFS VCC L7B, live DT vcc-voltage-level 2504000..2952000.
++	 */
++	if (!res || !((!strcmp(res, "ldoc11") && mv >= 2950 && mv <= 3400) ||
++	    (!strcmp(res, "ldob7") && mv >= 2504 && mv <= 2952))) {
++		printf("SWEET RPMH: expected ldoc11 2950..3400 mV or ldob7 2504..2952 mV\n");
+ 		return EINVAL;
+ 	}
+ 	if (__atomic_exchange_n(&rh_lock, 1, __ATOMIC_ACQUIRE)) {
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 259b218..6eee43a 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -637,6 +637,23 @@ sweet_ufs_init(void)
+ 	su.lun = 0;
+ 	su.secsize = DEV_BSIZE;
+ 
++	/*
++	 * Spacewar: ABL leaves the device in Power Down with media reads hanging
++	 * (commands without flash access still work): vote the VCC rail the ADT
++	 * names (vcc-rpmh/vcc-mv) before talking to it. sweet has no such property.
++	 */
++	const char *vcc;
++	const uint32_t *vcc_mv;
++	unsigned int prop_size;
++	if (SecureDTGetProperty(node, "vcc-rpmh", (void const **)&vcc, &prop_size) == kSuccess &&
++	    SecureDTGetProperty(node, "vcc-mv", (void const **)&vcc_mv, &prop_size) == kSuccess &&
++	    prop_size == sizeof(uint32_t)) {
++		extern int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
++		int vcc_error = sweet_rpmh_vreg_enable(vcc, *vcc_mv);
++		printf("SWEET UFS: VCC %s %u mV vote: %d\n", vcc, *vcc_mv, vcc_error);
++		delay(10000);   /* rail ramp */
++	}
++
+ 	lck_mtx_lock(&sweet_ufs_lock);
+ 	error = ufs_take_over_host();
+ 	if (!error) {
