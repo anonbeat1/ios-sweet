@@ -118,16 +118,42 @@ static int m_done(void)
 	return -1;
 }
 
-/* One CS-framed full-duplex transfer, polled FIFO (spi-geni-qcom.c sequence). */
-static int spi_xfer(const uint8_t *tx, uint8_t *rx, unsigned n)
+static uint32_t dbg_irq, dbg_status;	/* GENI state when a step failed */
+
+/* Stuck command: cancel, then abort (handle_fifo_timeout order). */
+static void m_recover(void)
 {
-	m_cmd(8, 0);					/* SPI_CS_ASSERT */
-	if (m_done())
-		return -1;
+	dbg_irq = rd(SE(0x610)), dbg_status = rd(SE(0x40));
+	wr(SE(0x618), 0xffffffffu);
+	wr(SE(0x604), 1u << 2);				/* M_GENI_CMD_CANCEL */
+	if (m_done()) {
+		wr(SE(0x618), 0xffffffffu);
+		wr(SE(0x604), 1u << 1);			/* M_GENI_CMD_ABORT */
+		for (int i = 0; i < 100000 && !(rd(SE(0x610)) & (1u << 5)); i++)	/* M_CMD_ABORT */
+			udelay(1);
+	}
+	wr(SE(0x618), 0xffffffffu);
+}
+
+/*
+ * One full-duplex transfer, polled FIFO. explicit_cs = 0: a single
+ * SPI_FULL_DUPLEX without FRAGMENTATION, the engine frames CS itself;
+ * 1: CS_ASSERT / FULL_DUPLEX+FRAGMENTATION / CS_DEASSERT (probe 1 hung in
+ * the DEASSERT).
+ */
+static int spi_xfer(const uint8_t *tx, uint8_t *rx, unsigned n, int explicit_cs)
+{
+	if (explicit_cs) {
+		m_cmd(8, 0);				/* SPI_CS_ASSERT */
+		if (m_done()) {
+			m_recover();
+			return -1;
+		}
+	}
 	wr(SE(0x25c), rd(SE(0x25c)) & ~1u);		/* TRANS_CFG: no CS toggle */
 	wr(SE(0x26c), n);				/* TX_TRANS_LEN (8-bit words) */
 	wr(SE(0x270), n);				/* RX_TRANS_LEN */
-	m_cmd(3, 1u << 2);				/* SPI_FULL_DUPLEX, FRAGMENTATION */
+	m_cmd(3, explicit_cs ? 1u << 2 : 0);		/* SPI_FULL_DUPLEX (+FRAGMENTATION) */
 	unsigned ti = 0, ri = 0;
 	for (unsigned spin = 0; ri < n && spin < 100000; spin++) {
 		while (ti < n && (rd(SE(0x800)) & 0x0fffffffu) < tx_depth) {
@@ -145,9 +171,17 @@ static int spi_xfer(const uint8_t *tx, uint8_t *rx, unsigned n)
 			udelay(1);
 	}
 	int rc = m_done() || ri < n ? -2 : 0;
-	m_cmd(9, 0);					/* SPI_CS_DEASSERT */
-	if (m_done())
-		rc = -3;
+	if (rc)
+		m_recover();
+	else
+		dbg_irq = rd(SE(0x610)), dbg_status = rd(SE(0x40));
+	if (explicit_cs) {
+		m_cmd(9, 0);				/* SPI_CS_DEASSERT */
+		if (m_done()) {
+			m_recover();
+			rc = -3;
+		}
+	}
 	udelay(150);					/* focaltech CS_HIGH_DELAY */
 	return rc;
 }
@@ -220,14 +254,18 @@ void touch_bringup(void)
 		udelay((8 + i) * 1000);
 		static const uint8_t start1[4] = { 0x55, 0x00, 0x00, 0x00 };
 		uint8_t rx[16] = { 0 };
-		int rc = spi_xfer(start1, rx, sizeof(start1));
+		int cs = i == 2;
+		int rc = spi_xfer(start1, rx, sizeof(start1), cs);
+		uint32_t irq1 = dbg_irq, st1 = dbg_status;
 		udelay(8000);
 		static const uint8_t rid[11] = { 0x90, 0xa0, 0x00, 0x02 };
 		uint8_t id[11] = { 0 };
-		int rc2 = spi_xfer(rid, id, sizeof(rid));
+		int rc2 = spi_xfer(rid, id, sizeof(rid), cs);
 		uint16_t crc = crc16_kermit(&id[7], 2), got = (uint16_t)(id[10] << 8 | id[9]);
-		con_hex2("FT 0x55", "rc=", (uint32_t)rc, "st=", rx[3]);
+		con_hex2(cs ? "55 csx" : "55 auto", "rc=", (uint32_t)rc, "st=", rx[3]);
+		con_hex2(" geni", "irq=", irq1, "status=", st1);
 		con_hex2("FT 0x90", "rc=", (uint32_t)rc2, "st=", id[3]);
+		con_hex2(" geni", "irq=", dbg_irq, "status=", dbg_status);
 		con_hex2("FT ID", "id=", id[7] << 8 | id[8], "crc ok=", crc == got);
 		if (rc2 == 0 && crc == got && id[7] == 0x56 && id[8] == 0x62) {
 			con_str("FT3680", "boot id 0x5662: SPI link works");
