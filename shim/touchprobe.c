@@ -291,7 +291,12 @@ void touch_bringup(void)
 
 /* ---- GPI DMA + SMMU state (read-only) ---- */
 
-#define GPI_EE		(0x00a00000UL + 0x10000UL)	/* gpi-top + qcom,gpi-ee-offset */
+/*
+ * gpi.c: ee_base = gpi-top - qcom,gpi-ee-offset (subtracted). GPII 0 then
+ * sits at 0xa10000, one of the DT trusted-touch-io-bases (LE VM). The first
+ * probe added the offset and hit GPII 9 (external abort at 0xa34000).
+ */
+#define GPI_EE		(0x00a00000UL - 0x10000UL)
 #define SMMU		0x15000000UL			/* apps_smmu */
 
 void gpi_smmu_probe(void)
