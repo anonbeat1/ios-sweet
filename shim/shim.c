@@ -383,27 +383,43 @@ void shim_main(uint64_t dtb)
 
 #ifdef SPACEWAR
 	/*
-	 * Probe 3. Cmd-mode panel: probe 2's free-running 20 ms kicks gave only
-	 * torn/noisy bands. Page 0: one kick after drawing, then INTF autorefresh
-	 * with no further kicks (TICK rows appear only if it works).
+	 * Probe 4. Probe 3's video: ABL leaves the cmd-mode pipeline refreshing
+	 * by itself (our blue fill appeared top-down with no kick), then the
+	 * picture froze within ~1 s while CTL/PP registers were being read and
+	 * the CPU never reset. Phase A touches no MDP register for 20 s (if the
+	 * ms counter freezes, refresh dies on its own); phase B reads one
+	 * register at a time, address on screen first (the last row names it).
 	 */
+	static const uint32_t regs[] = {
+		0x5014, 0x5000, 0x5024, 0x5030,				/* SSPP VIG0 */
+		0x16014, 0x16000, 0x16018, 0x6a030,			/* CTL0, PP0 */
+		0x17014, 0x17000, 0x17018, 0x6b030,			/* CTL1, PP1 */
+		0x18014, 0x18000, 0x18018, 0x6c030,			/* CTL2, PP2 */
+		0x19014, 0x19000, 0x19018, 0x6d030,			/* CTL3, PP3 */
+		0x36280, 0x36284, 0x36288, 0x362a8, 0x362ac,		/* INTF1 tear */
+	};
 	stage = "display";
-	if (sw_display_init() == -1 || !sw_ctl)
-		reset(10);	/* nothing on screen: a ~10 s reboot means "no scanout pipe" */
-	con_clear(BLUE);
-	con_str("SHIM", "spacewar probe 3, page 0");
-	sw_display_dump();
-	con_str("KICK", "single kick, autoref in 8s");
-	sw_kick();
-	delay_ms(8000);
-	int ar = sw_autorefresh();
-	con_hex2("AUTOREF", "idle=", ar >> 16, "on=", ar & 0xffff);
-	for (int i = 1; i <= 10; i++) {
-		con_hex2("TICK", "n=", i, 0, 0);
-		delay_ms(1000);
+	uint64_t t0 = now();
+	for (unsigned i = 0; i < 200; i++) {
+		if (i % 40 == 0) {
+			con_clear(i / 40 % 2 ? BLUE : RED);
+			con_str("SHIM", "spacewar probe 4: A no regs");
+		}
+		con_hex2("T", "ms=", to_us(now() - t0) / 1000, "i=", i);
+		delay_ms(100);
 	}
-	if (!(ar & 0xffff))	/* no autorefresh: fall back to probe 2's kick CPU */
-		smc(PSCI_CPU_ON, (uint64_t)SW_KICK_CPU << 8, (uintptr_t)secondary_entry, SW_KICK_CPU);
+	for (unsigned i = 0; i < sizeof(regs) / sizeof(regs[0]); i++) {
+		if (i % 10 == 0) {
+			con_clear(i / 10 % 2 ? RED : BLUE);
+			con_str("SHIM", "spacewar probe 4: B reads");
+		}
+		con_hex2("READ", "a=", 0x0ae00000U + regs[i], 0, 0);
+		delay_ms(300);
+		con_hex2(" ", "v=", rd32(0x0ae00000UL + regs[i]), 0, 0);
+		delay_ms(300);
+	}
+	con_str("DONE", "all reads ok");
+	reset(10);
 	con_clear(RED);
 	con_str("SHIM", "spacewar probe 3, page 1/2");
 	con_hex2("DTB", "at=", dtb, "magic=", dtb ? __builtin_bswap32(rd32(dtb)) : 0);
