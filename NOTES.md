@@ -197,7 +197,11 @@ Separate effort from sweet; sweet handoff below is unchanged.
     (75 SMRs); no valid SMR matches SID 0x56 (GPI) or 0x43 (qupv3_1).** => GPI DMA would fault: needs an SMR (id 0x56,
     mask 0) + S2CR bypass (or a translating context bank) before use. SMMU global writes under the Qualcomm hypervisor are
     untested (may be filtered).
-    Next: (1) SMR/S2CR bypass for SID 0x56, verify by readback; (2) polled GPI driver on GPII 1 (TRE/EV rings, ALLOCATE/
+    SMMU write test (a6d4d5a, 18:49): free SMR 8 (old S2CR 0x000200FF = fault, cbndx 0xff); wrote S2CR bypass then SMR
+    -> readback **SMR 0x80000056 (accepted) but S2CR 0x00020000 (forced to FAULT)**: the hypervisor virtualizes the SMMU
+    and refuses bypass for HLOS streams. GPI DMA needs a translating stage-1 context bank (CBAR/CBA2R, TCR/MAIR/TTBR0,
+    SCTLR, S2CR translate -> cbndx), like Linux arm-smmu. Note: SMR 8 stays valid (fault) until reboot.
+    Next: (1) free context bank + identity-mapped S1 tables for a DMA buffer, S2CR translate for SID 0x56, verify; (2) polled GPI driver on GPII 1 (TRE/EV rings, ALLOCATE/
     START commands, CONFIG0/GO/DMA TREs per spi-msm-geni.c setup_gsi_xfer); (3) FT3680 boot id 0x5662.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
