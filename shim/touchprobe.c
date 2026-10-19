@@ -501,6 +501,18 @@ static void ring_put(struct tre *ring, unsigned *wp, uint32_t d0, uint32_t d1, u
  */
 static uint32_t gsi_dbg[4];
 
+static void gsi_dump(const char *what)
+{
+	con_str(what, "");
+	con_hex2(" ch0", "ctx=", rd(CH_CTX(0)), "rp=", rd(CH_CTX(0) + 0x10));
+	con_hex2(" ch1", "ctx=", rd(CH_CTX(1)), "rp=", rd(CH_CTX(1) + 0x10));
+	con_hex2(" ev", "ctx=", rd(EV_CTX), "rp=", rd(EV_CTX + 0x10));
+	con_hex2(" gpii", "irq=", rd(G(0x23080)), "err=", rd(G(0x23200)));
+	con_hex2(" gpii", "glob=", rd(G(0x23100)), "gen=", rd(G(0x23118)));
+	con_hex2(" se13", "geni=", rd(SE(0x40)), "m_irq=", rd(SE(0x610)));
+	smmu_fault_report();
+}
+
 static int gsi_xfer(const uint8_t *tx, uint8_t *rx, unsigned n)
 {
 	for (unsigned i = 0; i < n; i++)
@@ -515,8 +527,25 @@ static int gsi_xfer(const uint8_t *tx, uint8_t *rx, unsigned n)
 	}
 	ring_put(tx_ring, &tx_wp, 3, 0, n, 2u << 20 | 1u << 11 | 1);	/* GO full duplex, cs 0, link_rx, chain */
 	ring_put(tx_ring, &tx_wp, (uint32_t)(uintptr_t)dma_tx, 0, n, 1u << 20 | 1u << 9);	/* DMA_W_BUF, ieot */
+	/* touch5 crashed to CrashDump within the first transfer: step through the first one */
+	static int stepped;
+	if (!stepped) {
+		con_hex2("DB rx", "wp=", (uint32_t)(uintptr_t)&rx_ring[rx_wp], "in 3 s", 0);
+		udelay(3000000);
+	}
 	wr(CH_DB(1), (uint32_t)(uintptr_t)&rx_ring[rx_wp]);
+	if (!stepped) {
+		udelay(2000000);
+		gsi_dump("after rx");
+		con_hex2("DB tx", "wp=", (uint32_t)(uintptr_t)&tx_ring[tx_wp], "in 3 s", 0);
+		udelay(3000000);
+	}
 	wr(CH_DB(0), (uint32_t)(uintptr_t)&tx_ring[tx_wp]);
+	if (!stepped) {
+		udelay(2000000);
+		gsi_dump("after tx");
+		stepped = 1;
+	}
 
 	uint32_t want = (uint32_t)(uintptr_t)&rx_ring[rx_wp];
 	int rc = -1;
@@ -540,13 +569,8 @@ static int gsi_xfer(const uint8_t *tx, uint8_t *rx, unsigned n)
 			gsi_dbg[j] = ev_ring[ev_rp].d[j];
 		ev_rp++;
 	}
-	if (rc) {
-		con_hex2(" ch0", "ctx=", rd(CH_CTX(0)), "rp=", rd(CH_CTX(0) + 0x10));
-		con_hex2(" ch1", "ctx=", rd(CH_CTX(1)), "rp=", rd(CH_CTX(1) + 0x10));
-		con_hex2(" gpii", "irq=", rd(G(0x23080)), "err=", rd(G(0x23200)));
-		con_hex2(" se13", "geni=", rd(SE(0x40)), "m_irq=", rd(SE(0x610)));
-		smmu_fault_report();
-	}
+	if (rc)
+		gsi_dump("timeout");
 	con_hex2(" ev", "d2=", gsi_dbg[2], "d3=", gsi_dbg[3]);
 	return rc;
 }

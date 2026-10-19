@@ -214,6 +214,14 @@ Separate effort from sweet; sweet handoff below is unchanged.
     and SMMU cb FSR/FAR/FSYNR0. Then the old FT3680 boot-id loop (0x55, read 0x90 with CRC) runs over gsi_xfer.
     Expected outcomes to look for on screen: "free cb=" accepted (sctlr bit0 = 1, s2cr type 0), GPII 1 ch0/ch1 state 2,
     and "FT3680 boot id 0x5662". Failure lines name the step (EV ALLOC / CHn ALLOC / CHn START / transfer timeout).
+    **touch5 result (19:03, photos)**: SMMU id1 0x6000003D (4K pages, 61 CBs, NUMS2CB 0), CB base 0x15080000; **cb 7 +
+    SMR 8 accepted by the hypervisor**: sctlr 0x67, cbar 0x0001F300, tcr 0x00800019, ttbr0 0xA00B3000, SMR 0x80000056,
+    S2CR 0x00000007 (translate -> cb7). **GPII 1 up**: ch0 ctx 0x1020001A / ch1 0x10200112 (state 2 STARTED), ev ctx
+    0x10110012 (ALLOCATED), ev rp 0xA00B2400. Then nothing more on screen and the phone went to **"NOTHING CrashDump Mode
+    (minidump)"** (reset_reason garbled) => fatal reset during the first gsi_xfer, i.e. at the first GPI DMA (TRE fetch) or
+    SPI. Buffers are in 0xA00B0000 (System RAM in Android's iomem). Not known yet which doorbell triggers it.
+    touch6 (`shim/out/spacewar-touch6-step.img`): first transfer stepped: "DB rx" + 3 s, RX doorbell, 2 s, dump (ch/ev ctx+RP,
+    GPII irq/err/glob/gen, GENI, SMMU FSR/FAR), "DB tx" + 3 s, TX doorbell, 2 s, dump.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
