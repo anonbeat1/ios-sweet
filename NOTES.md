@@ -392,6 +392,11 @@ Separate effort from sweet; sweet handoff below is unchanged.
     The yupik GDSC gdsc@10f004 is GCC *offset* 0xf004 (same as sweet). Fixed in mkadt (SPACEWAR_USB gdscr_off 0xf004);
     master-off 0xf010 / cfgnoc-off 0xf07c were already offsets. ADT-only fix, kernel unchanged (GCC_SIZE 0x1f0000 kept,
     harmless). Image `shim/out/spacewar-xnu-0091-usb.img` rebuilt.
+    **3rd usb boot (21:22): GDSC + clocks read OK** ("GDSC usb30_prim 0xf822f000 on", master 0x221 on, sleep 0x10c00 on,
+    utmi on), then external abort at the 4th cbcr diagnostic entry: `usb_cbcr[]` offsets past utmi (cfg-noc 0x502c, aggre
+    0x8201c, ahb2phy 0x6a004, clkref 0x8c010) are sweet/sdmmagpie-specific and external-abort on yupik. Fixed in sweet_usb.c:
+    on a no-QUSB2 board read only the first 3 cbcr entries (master/sleep/utmi, cross-SoC); clocks_on already uses the
+    parameterised offsets. Needs a kernel rebuild (CI).
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
