@@ -347,6 +347,8 @@ Separate effort from sweet; sweet handoff below is unchanged.
     on, sweettouchdelay=20) to read the `SWEET FTS:` init lines (SMMU cb, GPII 0, boot id, fw ecc, app chip id). Driver
     starts 20-30 s after boot. NEXT: `fastboot boot spacewar-xnu-0089-fast.img`, wait for the lock screen, try to swipe/tap;
     if dead, boot the diag image and read where SWEET FTS stops.
+    **MILESTONE 2026-10-19 ~20:25: TOUCH WORKS IN iOS ON SPACEWAR** (user, `spacewar-xnu-0089-fast.img`): the lock screen /
+    SpringBoard respond to touch. UI is very slow and laggy (software rendering, no GPU): next topic = smoothness.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
