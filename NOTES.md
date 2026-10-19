@@ -146,8 +146,8 @@ Separate effort from sweet; sweet handoff below is unchanged.
     -[CCSModuleRepository _queue_filterModuleMetadataByAssociatedBundleAvailability:] -> LSApplicationRecord; t1 in
     `__LAUNCH_SERVICES_IS_RESEEDING_ITS_DATABASE_AND_MAY_BLOCK__` (sync NSXPC to lsd)**: first boot of a fresh image rebuilds
     the LaunchServices database (sweet's images had done this in earlier boots). Expected one-time; waiting.
-  - **MILESTONE (2026-10-19 ~18:00): iOS 16.7.16 LOCK SCREEN on the Nothing Phone (1)** (diag boot 17:39, cpus=8, console on,
-    xnu 0087, image ios16-root-20H392-spacewar). Reached after the LaunchServices reseed (~20 min on this first boot); user
+  - **MILESTONE (2026-10-19 ~17:54, ~15 min after boot): iOS 16.7.16 LOCK SCREEN on the Nothing Phone (1)** (diag boot 17:39, cpus=8, console on,
+    xnu 0087, image ios16-root-20H392-spacewar). Reached after the LaunchServices reseed; user
     saw a CRASH line scroll by (not identified; sweet had mobileactivationd/installcoordinationd/mediaserverd loops).
     Touch and buttons are off (sweettouch=0 sweetkeys=0: sweet's Goodix-I2C/PM6150 drivers do not apply) -> cannot unlock yet.
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
