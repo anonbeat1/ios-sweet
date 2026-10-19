@@ -383,6 +383,10 @@ Separate effort from sweet; sweet handoff below is unchanged.
     :5140). NOT booted yet: expect "SWEET SMMU: context bank N", "SWEET SMMU: sid 0xe0 -> ... translate", "SWEET USB: running",
     then the Mac enumerating a USB Ethernet interface and `ping 192.168.7.2`. Risk: DWC3 clocks/PHY on yupik unverified; a
     stuck soft-reset or DMA fault would show in the first boot.
+    **0091 usb boot result (21:09, photo): kernel data abort** right after "SWEET TOUCH: disabled", ESR 0x96000007 (data
+    abort, translation fault L3), x8 = 0x10f004 (= usb_gdscr_off), FAR = GCC base + 0x10f004 = **read past the GCC mapping**:
+    sweet_usb.c mapped only GCC_SIZE 0x90000 but Spacewar's USB30 GDSC is at 0x10f004 (sweet's is 0xf004). Fixed:
+    GCC_SIZE -> 0x1f0000 (live DT yupik-gcc reg <0x100000 0x1f0000>; covers sweet too). Rebuilding.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON

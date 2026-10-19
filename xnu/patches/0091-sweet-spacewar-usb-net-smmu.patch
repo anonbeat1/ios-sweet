@@ -216,7 +216,7 @@ index 000000000000..159863ef5940
 +}
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
-index b6c1a41ba737..3bd01ddc444c 100644
+index b6c1a41ba737..fc499f5d9cd3 100644
 --- a/bsd/dev/sweet_usb.c
 +++ b/bsd/dev/sweet_usb.c
 @@ -36,17 +36,58 @@
@@ -232,8 +232,9 @@ index b6c1a41ba737..3bd01ddc444c 100644
 +extern int sweet_smmu_map_sid(unsigned sid);
  
  #define GCC_PA                  0x00100000
- #define GCC_SIZE                0x00090000
+-#define GCC_SIZE                0x00090000
 -#define GCC_USB30_PRIM_GDSCR    0x0f004         /* bit 31: power on */
++#define GCC_SIZE                0x001f0000      /* yupik GCC is 0x1f0000; Spacewar GDSC is at 0x10f004 */
  #define CBCR_CLK_OFF            (1u << 31)
  
 +/*
