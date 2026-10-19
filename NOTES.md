@@ -54,8 +54,25 @@ Separate effort from sweet; sweet handoff below is unchanged.
   SGI1 10/10**, ICC_CTLR 0x8400.
   => Spacewar vs sweet for XNU: fb 0xE1000000 (no kick, never touch MDP), vtimer INTID 27, no EL1 CNTP_*, 8 CPUs via PSCI
   (MPIDR 0x000..0x700, cpu0 = A55), different RAM map (physBase must avoid the reserved list above).
-- Next: temp root (Magisk-patched boot via fastboot boot) -> partition backups + live FDT//proc/iomem (real RAM size and
-  dynamic reserved regions), then mkadt/mkpayload for Spacewar and a first XNU boot with cpus=1.
+- 2026-10-19 afternoon: Android setup wizard blocked by FRP (no internet on Wi-Fi or SIM); user got adb enabled anyway.
+  **Temp root**: Magisk v30.7 (official GitHub APK) patched stock boot.img on the phone -> `fastboot boot` of
+  `spacewar-stock/magisk/magisk_patched-30700_S9mAB.img` (nothing flashed). `su` works from adb shell.
+- **Backups (not in git)**: `~/Desktop/esrever/spacewar-stock/backup/` = every by-name partition except userdata, super,
+  logdump (88 images) + whole small LUNs sdb/sdc/sdd/sdf + GPT head/tail of sda/sde; all sha256-verified against on-device
+  hashes (`device.sha256`, `SHA256SUMS`). persist is mounted rw, so it was snapshotted via /data/local/tmp (hash-matched)
+  plus `persist-files.tgz` (461 entries). Live data in `spacewar-stock/live/`: live.dtb/.dts, iomem, cmdline, dmesg,
+  getprop, meminfo/cpuinfo, buses, `fts_tp.ko`.
+- **Live facts**: 8 GB RAM. /memory = 0x80000000+0x39700000, 0xC0000000+0xC0000000, 0x1_80000000+0x1_00000000
+  (i.e. 0x80000000-0xB9700000 and 0xC0000000-0x2_80000000). Static reserved-memory above 0xD0000000 ends with splash
+  0xE1000000 and dfps 0xE3300000+0x100000 => **0xE3400000-0x2_80000000 (~6.4 GB) has no firmware carve-outs**; candidate
+  XNU physBase 0xE4000000 (64 MB aligned). Partition table: userdata = /dev/block/sda10 (~107 GB), super = sda6.
+  Panel confirmed `qcom,mdss_dsi_rm692e5_visionox_amoled_120hz_cmd`. **Touch = Focaltech on SPI @0xa94000 (spi0.0),
+  chip id 0x5662, x 0-1080 y 0-2400, 10 points, irq gpio 417 / reset gpio 441; the Linux driver downloads 119284 bytes of
+  firmware into the IC's RAM on every boot** (blob embedded in fts_tp.ko) -> our touch driver must upload it too.
+  goodix-berlin@0 fails to probe (not fitted).
+- Next: XNU for Spacewar. (1) shim loader: header v3 => ABL hands the kernel vendor_boot's ramdisk followed by ours, so the
+  payload is not at initrd start; (2) mkadt: memory map above, 8 CPUs, vtimer 27, fb 0xE1000000; (3) first boot `cpus=1`
+  to the framebuffer console; then UFS root in userdata (destructive: confirm with the user first).
   Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
   Partition backups to take: persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots.
 
