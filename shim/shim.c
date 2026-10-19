@@ -30,8 +30,16 @@
 #define GICR_ISPENDR0		(GICR_SGI + 0x200)
 #define GICR_ISACTIVER0		(GICR_SGI + 0x300)
 #define GICR_ICFGR1		(GICR_SGI + 0xc04)
+#ifdef SPACEWAR
+/* DT: <GIC_PPI 11/14>, standard numbering. The hypervisor UNDEFs EL1 CNTP_* (probe 5). */
+#define VTIMER_INTID		27
+#define PTIMER_INTID		30
+#define TEST_TIMERS		(1U << VTIMER_INTID)
+#else
 #define VTIMER_INTID		19	/* DT: <GIC_PPI 3 ...>, not the usual 27 */
 #define PTIMER_INTID		18	/* DT: <GIC_PPI 2 ...> */
+#define TEST_TIMERS		((1U << VTIMER_INTID) | (1U << PTIMER_INTID))
+#endif
 #define SGI_INTID		1
 
 #define PSCI_VERSION		0x84000000UL
@@ -319,7 +327,7 @@ static void test_gic(void)
 	uint32_t pri_before = rd32(r + GICR_IPRIORITYR + 16);	/* INTIDs 16..19 */
 	for (int id = 0; id < 32; id++)
 		wr8(r + GICR_IPRIORITYR + id, 0xa0);
-	wr32(r + GICR_ISENABLER0, (1U << VTIMER_INTID) | (1U << PTIMER_INTID) | (1U << SGI_INTID));
+	wr32(r + GICR_ISENABLER0, TEST_TIMERS | (1U << SGI_INTID));
 	con_hex2("ENABLE", "was=", en_before, "now=", rd32(r + GICR_ISENABLER0));
 	(void)grp;
 	(void)pri_before;
@@ -382,15 +390,15 @@ void shim_main(uint64_t dtb)
 	 */
 	stage = "page 1";
 	con_clear(RED);
-	con_str("SHIM", "spacewar probe 5, page 1/2");
+	con_str("SHIM", "spacewar probe 6, page 1/2");
 	con_hex2("DTB", "at=", dtb, "magic=", dtb ? __builtin_bswap32(rd32(dtb)) : 0);
 	con_hex2("MIDR", "cpu0=", rsr("midr_el1"), "el=", rsr("CurrentEL") >> 2);
 	con_hex2("CNTFRQ", "hz=", rsr("cntfrq_el0"), 0, 0);
 	con_skip();
 	test_smp();
 	con_skip();
-	con_str("PAGE 2", "in 45s");
-	delay_ms(45000);
+	con_str("PAGE 2", "in 5s");
+	delay_ms(5000);
 #else
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
 	stage = "loader";
@@ -427,7 +435,7 @@ void shim_main(uint64_t dtb)
 #ifndef SPACEWAR
 	con_str("SHIM", "sweet milestone 3");
 #else
-	con_str("SHIM", "spacewar probe 5, page 2/2");
+	con_str("SHIM", "spacewar probe 6, page 2/2");
 #endif
 	con_skip();
 	con_hex2("DTB", "at=", dtb, "magic=", dtb ? __builtin_bswap32(rd32(dtb)) : 0);

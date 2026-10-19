@@ -40,7 +40,13 @@ Separate effort from sweet; sweet handoff below is unchanged.
   froze probes 1-3** (frozen frame = the transfer in flight at the kick). So: never write MDP; treat the splash buffer as a
   plain framebuffer like sweet. Kick code removed (spacewar.c deleted). The purple noise band at the top (~first 260
   lines) seen in probes 1-3 is not explained yet.
-  **Probe 5**: shim.c -DSPACEWAR page 1 (DTB, MIDR, CNTFRQ, PSCI CPU_ON 1..7), page 2 (sweet milestone-3: 16K MMU, PSCI, GIC).
+  **Probe 5** (904f47f, photos): page 1 OK: DTB at 0xAFC50000 (magic ok), cpu0 MIDR 0x412FD050 (A55 r2p0), EL1,
+  CNTFRQ 19.2 MHz, **PSCI CPU_ON ret 0 for CPU1..7, MPIDR 0x81000100..0x81000700**. Image was loaded at 0xA00B0000.
+  Page 2 panicked in "gic vtimer": ESR 0x02000000 (UNDEF) at image+0x18C8 = `msr CNTP_TVAL_EL0` in the IRQ handler.
+  => (1) Spacewar timer PPIs are standard (DT <1 13>,<1 14>,<1 11>,<1 12>): **vtimer INTID 27, ptimer 30** (sweet: 19/18);
+  INTID 18 is something else and fired once enabled. (2) **EL1 physical timer access UNDEFs** (hypervisor): XNU must
+  use only the virtual timer (sweet already does; ADT needs INTID 27).
+  **Probe 6**: same with SPACEWAR timer INTIDs, ptimer not enabled, page 1 shortened to 5 s.
   Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
 - Next: (4) temp root (Magisk-patched boot via fastboot boot)
   to pull live FDT, /proc/iomem and partition backups (persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots).
