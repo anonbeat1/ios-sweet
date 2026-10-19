@@ -249,8 +249,20 @@ void touch_bringup(void)
 	uint32_t ifdis = rd(SE(0x64));
 	con_hex2("SE13", "if_dis=", ifdis, "gp_len=", rd(SE(0x644)));
 	if (ifdis & 1) {
-		con_str("SE13", "FIFO interface disabled: GSI (GPI DMA) mode only");
-		return;
+		/*
+		 * Firmware set up for GSI. Mainline geni_load_se_fw() picks FIFO
+		 * mode by clearing SE_FIFO_IF_DISABLE (0x2008, writable; 0x64 is
+		 * its read-only mirror) with DMA_IF_EN (0x2004) set; the protocol
+		 * firmware itself is the same. Try that without reloading it.
+		 */
+		wr(SE(0x2004), rd(SE(0x2004)) | 1u);	/* DMA_IF_EN */
+		wr(SE(0x2008), rd(SE(0x2008)) & ~1u);	/* FIFO interface on */
+		ifdis = rd(SE(0x64));
+		con_hex2("FIFO IF", "if_dis=", ifdis, "reg=", rd(SE(0x2008)));
+		if (ifdis & 1) {
+			con_str("SE13", "FIFO interface stays disabled: GSI only");
+			return;
+		}
 	}
 
 	/* focaltech_flash.c fts_enter_into_boot: reset, 0x55, read boot id 0x90 */
