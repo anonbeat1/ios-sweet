@@ -87,6 +87,12 @@ Separate effort from sweet; sweet handoff below is unchanged.
     keepsyms=1 sweetkeys=0 sweettouch=0 sweetusb=0 ufsroot=ios_none"; shim/build-spacewar.sh pl.bin` -> expect the
     fbcon log up to "SWEET UFS: no GPT partition named" / root wait. No userdata writes. Then the iOS root in userdata
     (destructive: ask first).
+  - Fork for CI (user's choice, origin is read-only for this Mac's gh account): **github.com/anonbeat1/ios-sweet**, remote
+    `fork`; Actions enabled. Run 39260067745 (0082) = success -> `xnu/out-0082/` (gitignored).
+  - **First XNU boot on Spacewar (2026-10-19 15:35, `shim/out/spacewar-xnu-0082.img`)**: loader + early console worked, reached
+    "SWEET EARLY 20: kprintf startup complete", then panic "Undefined kernel instruction pc=0xfffffe0007491340
+    instr=d51be228 @sleh.c:951" = `msr CNTP_CTL_EL0` in _enable_virtual_timer (fiq_context_init). xnu 0083 skips that
+    precautionary write under SWEET (only EL1 CNTP_* use in the kernel).
   Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
   Partition backups to take: persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots.
 
