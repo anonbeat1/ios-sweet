@@ -437,6 +437,14 @@ Separate effort from sweet; sweet handoff below is unchanged.
     on|off` (forwarding + pf nat in anchor com.apple/ios-sweet; the Mac's default route was utun4 = a VPN at the time).
     NOT booted yet: expect "SWEET NET: IOKit interface ue0 published (... stack up)" in the live log, then configd
     adopting ue0 (Settings may show an Ethernet entry), default route via 192.168.7.1, DNS queries reaching the Mac.
+    **0092 boot (22:52)**: boots, touch/Safari work, USB log flows; Mac NAT on en0 (forwarding 1, pf anchor loaded) but
+    `netstat -s -p ip` shows **0 packets forwarded** while MobileSafari/WebContent run => the phone sends nothing off-link
+    via 192.168.7.1: no default route on ue0 (configd did not adopt or did not apply it). Cause unknown: the early log
+    (incl. "SWEET NET: IOKit interface ue0 ...") was lost because ud_log_thread advanced its position even when sock_send
+    failed (the Mac had no 192.168.7.1 yet). **xnu 0093** (`0093-sweet-usblog-no-loss-netstack-trace.patch`, on 0092):
+    keep unsent chunks (rewind pos on send failure) and log "SWEET NET: <proc> opened IONetworkStack" in the stack user
+    client (proof InterfaceNamer saw the IOKit objects). Next boot: read the whole log for SWEET NET lines (publish, stack
+    open, 0080's route/address trace from configd/IPConfiguration).
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON

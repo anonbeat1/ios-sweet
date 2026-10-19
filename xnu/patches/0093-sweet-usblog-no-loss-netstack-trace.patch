@@ -1,0 +1,59 @@
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index 81ca117a489b..73371c330434 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -893,6 +893,7 @@ ud_log_thread(void *arg __unused, wait_result_t wr __unused)
+ 			continue;
+ 		}
+ 		uint32_t n;
++		uint64_t sent_upto = pos;
+ 		while ((n = sweet_log_copy(&pos, chunk, sizeof(chunk))) > 0) {
+ 			struct iovec iov = { .iov_base = chunk, .iov_len = n };
+ 			struct msghdr msg = {
+@@ -901,8 +902,11 @@ ud_log_thread(void *arg __unused, wait_result_t wr __unused)
+ 			};
+ 			size_t sent = 0;
+ 			if (sock_send(so, &msg, 0, &sent) != 0) {
+-				break;          /* no route/ARP yet: retry later */
++				/* no route/ARP yet (host not configured): keep the chunk for the next try */
++				pos = sent_upto;
++				break;
+ 			}
++			sent_upto = pos;
+ 		}
+ 	}
+ }
+diff --git a/iokit/Kernel/arm/SweetNetwork.cpp b/iokit/Kernel/arm/SweetNetwork.cpp
+index dc3eeac1d87c..c2899e3d33ea 100644
+--- a/iokit/Kernel/arm/SweetNetwork.cpp
++++ b/iokit/Kernel/arm/SweetNetwork.cpp
+@@ -25,6 +25,7 @@
+ #include <IOKit/IOUserClient.h>
+ #include <IOKit/IOKitKeys.h>
+ #include <IOKit/IOLib.h>
++#include <sys/proc.h>
+ #include <libkern/c++/OSArray.h>
+ #include <libkern/c++/OSData.h>
+ #include <libkern/c++/OSDictionary.h>
+@@ -58,10 +59,21 @@ OSDefineMetaClassAndStructors(IONetworkStack, IOService);
+ class SweetNetworkStackUserClient : public IOUserClient {
+ 	OSDeclareDefaultStructors(SweetNetworkStackUserClient);
+ public:
++	bool initWithTask(task_t owningTask, void *securityID, UInt32 type) APPLE_KEXT_OVERRIDE;
+ 	IOReturn clientClose(void) APPLE_KEXT_OVERRIDE;
+ };
+ OSDefineMetaClassAndStructors(SweetNetworkStackUserClient, IOUserClient);
+ 
++/* Trace: InterfaceNamer (configd) opening the stack means it saw IOKit network objects. */
++bool
++SweetNetworkStackUserClient::initWithTask(task_t owningTask, void *securityID, UInt32 type)
++{
++	char name[32] = "?";
++	proc_selfname(name, sizeof(name));
++	IOLog("SWEET NET: %s opened IONetworkStack (type %u)\n", name, (unsigned)type);
++	return IOUserClient::initWithTask(owningTask, securityID, type);
++}
++
+ IOReturn
+ SweetNetworkStackUserClient::clientClose(void)
+ {
