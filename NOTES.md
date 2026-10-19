@@ -181,7 +181,16 @@ Separate effort from sweet; sweet handoff below is unchanged.
     FULL_DUPLEX+FRAGMENTATION, CS_DEASSERT) hung in DEASSERT; run 2 (single FULL_DUPLEX, engine CS) hung at once (M_IRQ 0,
     GENI_STATUS 0x41, cancel/abort ineffective). The DT compatible "qcom,spi-geni" = downstream spi-msm-geni.c (no set_cs,
     gsi_mode = GENI_IF_DISABLE_RO bit0). Hypothesis: SE13 firmware is in GSI mode (FIFO interface disabled) -> needs GPI DMA.
-    `shim/out/spacewar-touch3.img` (ec0d1d4) prints GENI_IF_DISABLE_RO and stops if set: NOT yet booted.
+    **touch3 (18:38): GENI_IF_DISABLE_RO = 1 -> SE13 firmware is in GSI mode, FIFO interface disabled (confirmed).**
+    touch4 (02d52ba, 18:41): tried mainline geni_load_se_fw's FIFO switch (SE+0x2004 DMA_IF_EN / SE+0x2008
+    SE_FIFO_IF_DISABLE) -> **synchronous external abort at FAR 0xA96004 (ESR 0x96000010)**: SE13's 0x2000 page is
+    XPU-protected from HLOS (TZ owns the transfer mode). FIFO mode and SE firmware reload are out.
+    => Touch needs the GPI DMA engine like Android: gpi_dma1 @0xa00000 (gpi-top, size 0x60000, qcom,gpi-ee-offset 0x10000,
+    max-num-gpii 12, gpii-mask 0x1e = GPII 1-4 for HLOS, static-gpii-mask 0x1 + qcom,le-vm = GPII 0 reserved), SE13 dmas
+    <gpi 0 5 1 0x40 2> (tx) / <gpi 1 5 1 0x40 2> (rx), and **iommus <apps_smmu 0x56>** (GPI) / 0x43 (qupv3_1 wrapper):
+    check whether SID 0x56 translates or bypasses before any DMA. References: drivers/dma/qcom/msm_gpi.c (not yet fetched:
+    the sparse path guess was wrong) and spi-msm-geni.c setup_gsi_xfer() (in spacewar-stock/nothing-kernel).
+    Next: read-only GPI + SMMU probe, then a polled shim GPI driver (TRE/EV rings, CONFIG0/GO/DMA TREs).
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
