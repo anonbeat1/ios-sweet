@@ -332,7 +332,8 @@ struct tre { uint32_t d[4]; };
 static struct tre tx_ring[NTRE] __attribute__((aligned(NTRE * 16)));
 static struct tre rx_ring[NTRE] __attribute__((aligned(NTRE * 16)));
 static struct tre ev_ring[NTRE] __attribute__((aligned(NTRE * 16)));
-static uint8_t dma_tx[64] __attribute__((aligned(64))), dma_rx[64] __attribute__((aligned(64)));
+#define DMA_MAX		(32 * 1024)			/* FTS_FLASH_PACKET_LENGTH_SPI + header */
+static uint8_t dma_tx[DMA_MAX] __attribute__((aligned(64))), dma_rx[DMA_MAX] __attribute__((aligned(64)));
 static uint64_t smmu_l1[512] __attribute__((aligned(4096)));
 static unsigned tx_wp, rx_wp, ev_rp, gsi_cfg_done;
 static int smmu_cb = -1;
@@ -522,17 +523,25 @@ static void ring_put(struct tre *ring, unsigned *wp, uint32_t d0, uint32_t d1, u
 	*wp = (*wp + 1) % NTRE;
 }
 
+/* gpi_process_events: consume up to the HW read pointer, give the elements back, clear IEOB */
+static void ev_recycle(void)
+{
+	dc_civac(ev_ring, sizeof(ev_ring));
+	for (uint32_t hw_rp = rd(EV_CTX + 0x10); (uint32_t)(uintptr_t)&ev_ring[ev_rp] != hw_rp;)
+		ev_rp = (ev_rp + 1) % NTRE;
+	wr(EV_DB, (uint32_t)(uintptr_t)&ev_ring[(ev_rp + NTRE - 1) % NTRE]);
+	wr(G(0x230c0), 1);
+}
+
 /*
- * One full-duplex SPI transfer (<= 64 bytes): TX ring CONFIG0 (first time),
+ * One full-duplex SPI transfer (<= DMA_MAX bytes): TX ring CONFIG0 (first time),
  * GO, DMA tx; RX ring DMA rx. Done when the RX channel's read pointer
  * reaches its write pointer. Event ring printed on failure.
  */
-static uint32_t gsi_dbg[4];
-
 static void gsi_dump(const char *what)
 {
 	dc_civac(ev_ring, sizeof(ev_ring));
-	struct tre *e = ev_rp ? &ev_ring[ev_rp - 1] : &ev_ring[0];
+	struct tre *e = &ev_ring[(ev_rp + NTRE - 1) % NTRE];
 	con_hex2(what, "ch0 rp=", rd(CH_CTX(0) + 0x10), "ch1 rp=", rd(CH_CTX(1) + 0x10));
 	con_hex2("", "ev rp=", rd(EV_CTX + 0x10), "irq=", rd(G(0x23080)));
 	con_hex2("", "ev d2=", e->d[2], "d3=", e->d[3]);
@@ -561,7 +570,7 @@ static int gsi_xfer(const uint8_t *tx, uint8_t *rx, unsigned n)
 
 	uint32_t want = (uint32_t)(uintptr_t)&rx_ring[rx_wp];
 	int rc = -1;
-	for (int t = 0; t < 100000; t++) {
+	for (int t = 0; t < 500000; t++) {			/* 32 KB at 4.8 MHz = 55 ms */
 		if (rd(CH_CTX(1) + 0x10) == want && rd(CH_CTX(0) + 0x10) == (uint32_t)(uintptr_t)&tx_ring[tx_wp]) {
 			rc = 0;
 			break;
@@ -573,17 +582,9 @@ static int gsi_xfer(const uint8_t *tx, uint8_t *rx, unsigned n)
 	for (unsigned i = 0; i < n; i++)
 		rx[i] = dma_rx[i];
 
-	/* consume events (xfer completions), remember the last one */
-	dc_civac(ev_ring, sizeof(ev_ring));
-	uint32_t hw_rp = rd(EV_CTX + 0x10);
-	while ((uint32_t)(uintptr_t)&ev_ring[ev_rp] != hw_rp && ev_rp < NTRE - 1) {
-		for (int j = 0; j < 4; j++)
-			gsi_dbg[j] = ev_ring[ev_rp].d[j];
-		ev_rp++;
-	}
+	ev_recycle();
 	if (rc)
 		gsi_dump("timeout");
-	con_hex2(" ev", "d2=", gsi_dbg[2], "d3=", gsi_dbg[3]);
 	return rc;
 }
 
@@ -641,12 +642,7 @@ static void gsi_step(const char *what, unsigned n, const struct tre *t)
 		gsi_trace(2000000);	/* the GO steps only: screen space */
 	else
 		udelay(2000000);
-	dc_civac(ev_ring, sizeof(ev_ring));
-	while ((uint32_t)(uintptr_t)&ev_ring[ev_rp] != rd(EV_CTX + 0x10) && ev_rp < NTRE - 1)
-		ev_rp++;
-	/* gpi_process_events: give the consumed elements back, clear IEOB */
-	wr(EV_DB, (uint32_t)(uintptr_t)&ev_ring[(ev_rp + NTRE - 1) % NTRE]);
-	wr(G(0x230c0), 1);
+	ev_recycle();
 	gsi_dump(" ->");
 }
 
@@ -680,6 +676,7 @@ static void gpi_debug_dump(void)
 #define TRE_DMA_TX(n)		{ { (uint32_t)(uintptr_t)dma_tx, 0, n, 1u << 20 | 1u << 9 } }
 
 static void heartbeat(const char *what, int gsi);
+static void ft_fw_run(void);
 
 static void gsi_tests(void)
 {
@@ -736,8 +733,10 @@ static void gsi_tests(void)
 	uint16_t crc = crc16_kermit(&id[7], 2), got = (uint16_t)(id[10] << 8 | id[9]);
 	con_hex2("FT 0x90", "rc=", (uint32_t)rc, "st=", id[3]);
 	con_hex2("FT ID", "id=", id[7] << 8 | id[8], "crc ok=", crc == got);
-	if (rc == 0 && crc == got && id[7] == 0x56 && id[8] == 0x62)
+	if (rc == 0 && crc == got && id[7] == 0x56 && id[8] == 0x62) {
 		con_str("FT3680", "boot id 0x5662: SPI over GPI works");
+		ft_fw_run();
+	}
 }
 
 /*
@@ -788,4 +787,160 @@ static int touch_gsi_init(void)
 	heartbeat("after the GO: does CrashDump follow?", 0);	/* one row per beat */
 #endif
 	return -1;	/* the boot-id loop waits for a working GO */
+}
+
+/* ---- FT3680 firmware download + touch reports (focaltech_flash.c / _core.c) ---- */
+
+extern const uint8_t ft_fw[], ft_fw_end[];	/* ft_fw.S: the .i blob, not in git */
+static uint8_t ft_buf[DMA_MAX];
+
+/* fts_write: [cmd, 0x00, len-1 (BE16), 3 dummy if data, data], status rx[3] & 0xA0 == 0 */
+static int ft_write(const uint8_t *buf, unsigned len)
+{
+	unsigned dlen = len - 1;
+	for (int r = 0; r < 3; r++) {
+		unsigned n = 0;
+		ft_buf[n++] = buf[0], ft_buf[n++] = 0x00, ft_buf[n++] = dlen >> 8, ft_buf[n++] = dlen & 0xff;
+		if (dlen) {
+			ft_buf[n++] = 0, ft_buf[n++] = 0, ft_buf[n++] = 0;
+			for (unsigned i = 1; i < len; i++)
+				ft_buf[n++] = buf[i];
+		}
+		int rc = gsi_xfer(ft_buf, ft_buf, n);	/* rx overwrites ft_buf */
+		udelay(150);
+		if (!rc && !(ft_buf[3] & 0xa0))
+			return 0;
+	}
+	return -1;
+}
+
+/* fts_read: [cmd, 0xA0, len (BE16), 3 dummy, data, CRC16 kermit LE] */
+static int ft_read(uint8_t cmd, uint8_t *data, unsigned dlen)
+{
+	unsigned n = 7 + dlen + 2;
+	for (int r = 0; r < 3; r++) {
+		for (unsigned i = 0; i < n; i++)
+			ft_buf[i] = 0;
+		ft_buf[0] = cmd, ft_buf[1] = 0xa0, ft_buf[2] = dlen >> 8, ft_buf[3] = dlen & 0xff;
+		int rc = gsi_xfer(ft_buf, ft_buf, n);
+		udelay(150);
+		if (rc || (ft_buf[3] & 0xa0))
+			continue;
+		if (crc16_kermit(&ft_buf[7], dlen) != (uint16_t)(ft_buf[7 + dlen + 1] << 8 | ft_buf[7 + dlen]))
+			continue;
+		for (unsigned i = 0; i < dlen; i++)
+			data[i] = ft_buf[7 + i];
+		return 0;
+	}
+	return -1;
+}
+
+/* fts_ecc_cal_host: AL2 FCS over big-endian 16-bit words */
+static uint16_t ft_ecc(const uint8_t *d, unsigned len)
+{
+	uint16_t ecc = 0;
+	for (unsigned i = 0; i < len; i += 2) {
+		ecc ^= (uint16_t)(d[i] << 8 | d[i + 1]);
+		for (int j = 0; j < 16; j++)
+			ecc = (ecc & 1) ? (uint16_t)((ecc >> 1) ^ ((1u << 15) + (1u << 10) + (1u << 3))) : ecc >> 1;
+	}
+	return ecc;
+}
+
+/* FT3680 upgrade_setting_nf: length_coefficient 4, spi_pe 0, ecc_delay 5, no dram */
+static int ft_fw_download(void)
+{
+	const uint8_t *fw = ft_fw;
+	unsigned fwlen = (unsigned)(ft_fw_end - ft_fw);
+	if (fwlen < 0x120) {
+		con_str("FT FW", "no firmware linked in (FT_FW_I): stop");
+		return -1;
+	}
+	unsigned code_len = (unsigned)fw[0x100] << 8 | fw[0x101], code_n = (unsigned)fw[0x102] << 8 | fw[0x103];
+	unsigned size = code_len * 4;
+	con_hex2("FT FW", "len=", fwlen, "app=", size);
+	if (code_len + code_n != 0xffff || size > fwlen || size > 128 * 1024) {
+		con_str("FT FW", "bad app length: stop");
+		return -1;
+	}
+	/* fts_dpram_write: per packet SET_PRAM_ADDR 0xAD, then WRITE 0xAE + data */
+	static uint8_t pkt[DMA_MAX];
+	for (unsigned off = 0; off < size; off += 32 * 1024 - 16) {
+		unsigned plen = size - off < 32 * 1024 - 16 ? size - off : 32 * 1024 - 16;
+		const uint8_t addr[4] = { 0xad, (uint8_t)(off >> 16), (uint8_t)(off >> 8), (uint8_t)off };
+		if (ft_write(addr, 4)) {
+			con_hex2("FT FW", "set addr fail off=", off, 0, 0);
+			return -1;
+		}
+		pkt[0] = 0xae;
+		for (unsigned i = 0; i < plen; i++)
+			pkt[1 + i] = fw[off + i];
+		if (ft_write(pkt, 1 + plen)) {
+			con_hex2("FT FW", "write fail off=", off, 0, 0);
+			return -1;
+		}
+	}
+	/* fts_ecc_cal_tp: ECC 0xCC addr24 len24, 2 + ecc_delay 5 ms, read 0xCD */
+	const uint8_t ecc_cmd[7] = { 0xcc, 0, 0, 0, (uint8_t)(size >> 16), (uint8_t)(size >> 8), (uint8_t)size };
+	uint8_t ev[2] = { 0 };
+	if (ft_write(ecc_cmd, 7) || (udelay(7000), ft_read(0xcd, ev, 2))) {
+		con_str("FT FW", "ecc cmd/read fail");
+		return -1;
+	}
+	uint16_t tp = (uint16_t)(ev[0] << 8 | ev[1]), host = ft_ecc(fw, size);
+	con_hex2("FT ECC", "tp=", tp, "host=", host);
+	if (tp != host)
+		return -1;
+	/* fts_pram_start: 0x08, 10 ms */
+	const uint8_t start = 0x08;
+	if (ft_write(&start, 1))
+		return -1;
+	udelay(10000);
+	return 0;
+}
+
+static void ft_fw_run(void)
+{
+	int ok = 0;
+	for (int i = 0; i < 3 && !ok; i++)
+		ok = !ft_fw_download();
+	if (!ok) {
+		con_str("FT FW", "download failed");
+		return;
+	}
+	udelay(200000);
+	uint8_t cid = 0, ver = 0;
+	int rc = ft_read(0xa3, &cid, 1) | ft_read(0xa6, &ver, 1);
+	con_hex2("FT APP", "chip id=", (uint32_t)cid | (uint32_t)rc << 16, "fw ver=", ver);
+
+	/*
+	 * Touch reports: gpio81 low = data ready (DT falling edge); read 62
+	 * bytes at 0x01: [1] low nibble fingers, point i at 6i+2: flag<<6|XH,
+	 * XL, id<<4|YH, YL. One line per report with fingers, so 60 s of taps.
+	 */
+	con_str("TOUCH", "touch the screen (60 s)");
+	uint64_t end = ticks() + 192ULL * 60000000 / 10, next = 0;
+	uint32_t last = ~0u;
+	int lines = 0, irqs = 0;
+	while (ticks() < end) {
+		/* INT may be a short pulse: read on a low pin or every 16 ms */
+		int low = !(rd(TLMM_GPIO(81) + 4) & 1);
+		if (!low && ticks() < next)
+			continue;
+		irqs += low;
+		next = ticks() + 192ULL * 16000 / 10;
+		uint8_t b[62];
+		if (ft_read(0x01, b, sizeof(b)) || (b[1] == 0xff && b[2] == 0xff && b[3] == 0xff))
+			continue;
+		unsigned fingers = b[1] & 0x0f, ev = b[2] >> 6;
+		unsigned x = (unsigned)(b[2] & 0x0f) << 8 | b[3], y = (unsigned)(b[4] & 0x0f) << 8 | b[5];
+		uint32_t now = fingers << 28 | ev << 24 | x << 12 | y;
+		if (now == last)
+			continue;
+		last = now;
+		if (lines++ >= 40)
+			con_clear(BLUE), lines = 0;
+		con_hex2(" pt", "n|ev|irq=", fingers << 24 | ev << 16 | (irqs & 0xffff), "x|y=", x << 16 | y);
+	}
+	con_hex2("TOUCH", "60 s done, int lows=", (uint32_t)irqs, 0, 0);
 }

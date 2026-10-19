@@ -315,6 +315,15 @@ Separate effort from sweet; sweet handoff below is unchanged.
     GPII 0 (dmas cell 2 = STATIC_GPII), EV + CH0/CH1 ALLOCATE/START polled, TREs per spi-msm-geni.c, events recycled.
     Next: (1) firmware download (fts_fw_download: 119284-byte FT3680 app .i, pram write + ECC, start) and read chip id /
     touch reports via gpio81 polling; (2) port to XNU (sweet_touch for Spacewar: SMMU + GPI + FT3680 -> sweet_hid_touch).
+    touch17 heartbeat after the GO kept running (user moved on). **touch18** (`shim/out/spacewar-touch18-fw.img`, TOUCH_TEST 2):
+    after the boot id, FT3680 firmware download per focaltech_flash.c with the FT3680 upgrade_setting_nf (0x56 0x62,
+    length_coefficient 4, spi_pe 0, ecclen_max 128K, ecc_delay 5, no DRAM): app size = (fw[0x100..0x101]) * 4 = 0x747d * 4 =
+    119284 (whole blob; 0x747d + 0x8b82 = 0xffff), 4 packets of 0xAD addr + 0xAE data (32752 B max), ECC 0xCC + 7 ms + read
+    0xCD vs host AL2 FCS, start 0x08 + 10 ms; then chip id 0xA3 / fw ver 0xA6 and 60 s of touch reports (0x01, 62 B: [1] low
+    nibble fingers, point 0 at [2..5]; DT irq gpio81 level-low) printed on change. Firmware: build-spacewar.sh converts the
+    .i (FT_FW_I, default spacewar-stock/nothing-kernel/.../FT3680_WXN_M146_V27_D01_20220706_app.i) to shim/out/sw/ft_fw.bin
+    (gitignored), `shim/ft_fw.S` .incbin's it; verified byte-identical to the blob in the phone's fts_tp.ko (offset 1560).
+    GSI transfers now up to 32 KB (DMA_MAX), events recycled with wrap-around after each transfer.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
