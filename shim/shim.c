@@ -398,8 +398,8 @@ void shim_main(uint64_t dtb)
 	con_skip();
 	stage = "ufs";
 	test_ufs();	/* read-only; MMU off, right after ABL */
-	con_str("UFS", "probe done, pages in 60s");
-	delay_ms(60000);
+	con_str("UFS", "probe done, pages in 3 min");
+	delay_ms(180000);
 
 	stage = "page 1";
 	con_clear(RED);
