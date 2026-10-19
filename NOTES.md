@@ -324,6 +324,13 @@ Separate effort from sweet; sweet handoff below is unchanged.
     .i (FT_FW_I, default spacewar-stock/nothing-kernel/.../FT3680_WXN_M146_V27_D01_20220706_app.i) to shim/out/sw/ft_fw.bin
     (gitignored), `shim/ft_fw.S` .incbin's it; verified byte-identical to the blob in the phone's fts_tp.ko (offset 1560).
     GSI transfers now up to 32 KB (DMA_MAX), events recycled with wrap-around after each transfer.
+    **MILESTONE touch18 (2026-10-19 ~19:53, photo): FT3680 FIRMWARE RUNNING + TOUCH REPORTS IN THE SHIM.** FT FW len =
+    app = 0x1D1F4 (119284), ECC tp 0x22ED == host 0x22ED, app chip id (0xA3) 0x56, fw ver (0xA6) 0x27; taps reported with
+    the expected encoding, e.g. n=1 ev=0 (down) x 0x145 y 0x5C6 (325,1478) -> ev=2 (contact) -> n=0 ev=1 (up); gpio81
+    INT pulses counted (level-low as in DT), so IRQ-driven reads work.
+    Next: port to XNU for Spacewar (replace sweet's Goodix/I2C path when ADT says so): SMMU cb for SIDs 0x56/0x43, GPI
+    GPII 0 + SE13 GSI, FT3680 boot + firmware download, polling thread on gpio81 -> sweet_hid_touch(). Firmware must stay
+    out of git: carry it in the ADT (e.g. mkadt.py --spacewar --ft-fw <.i>) rather than in the kernel build.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
