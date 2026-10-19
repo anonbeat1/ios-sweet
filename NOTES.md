@@ -432,6 +432,11 @@ Separate effort from sweet; sweet handoff below is unchanged.
     stand-ins, SweetEthernetController, SweetNetworkBus; sweet_net_publish() called by sweet_usb.c after ud_if_create
     (boot-arg sweetnetcfg=0 skips) with IPv4 Manual 192.168.7.2/24 router 192.168.7.1, DNS 1.1.1.1 8.8.8.8. Applies to
     sweet too (same goal there). Host side for internet: Mac NAT (IP forwarding + pf nat) for 192.168.7.0/24 - to do.
+    0092 CI 39321529707 success (first build failed: getPlatform() returns IOPlatformExpert *, needs IOKit/IOPlatformExpert.h)
+    -> `xnu/out-0092`; image `shim/out/spacewar-xnu-0092-daily.img` (= 0091-daily cmdline). Host NAT: `tools/sweet-nat-macos.sh
+    on|off` (forwarding + pf nat in anchor com.apple/ios-sweet; the Mac's default route was utun4 = a VPN at the time).
+    NOT booted yet: expect "SWEET NET: IOKit interface ue0 published (... stack up)" in the live log, then configd
+    adopting ue0 (Settings may show an Ethernet entry), default route via 192.168.7.1, DNS queries reaching the Mac.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
