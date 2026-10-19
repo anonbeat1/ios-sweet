@@ -387,6 +387,11 @@ Separate effort from sweet; sweet handoff below is unchanged.
     abort, translation fault L3), x8 = 0x10f004 (= usb_gdscr_off), FAR = GCC base + 0x10f004 = **read past the GCC mapping**:
     sweet_usb.c mapped only GCC_SIZE 0x90000 but Spacewar's USB30 GDSC is at 0x10f004 (sweet's is 0xf004). Fixed:
     GCC_SIZE -> 0x1f0000 (live DT yupik-gcc reg <0x100000 0x1f0000>; covers sweet too). Rebuilding.
+    **2nd usb boot (21:20): external abort** (ESR 0x96000010) reading the same spot — because gdscr-off was set to the
+    ABSOLUTE 0x10f004 but usb_rd adds it to the GCC base already mapped at 0x100000, so it hit GCC+0x10f004 = abs 0x20f004.
+    The yupik GDSC gdsc@10f004 is GCC *offset* 0xf004 (same as sweet). Fixed in mkadt (SPACEWAR_USB gdscr_off 0xf004);
+    master-off 0xf010 / cfgnoc-off 0xf07c were already offsets. ADT-only fix, kernel unchanged (GCC_SIZE 0x1f0000 kept,
+    harmless). Image `shim/out/spacewar-xnu-0091-usb.img` rebuilt.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON

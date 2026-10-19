@@ -58,7 +58,8 @@ SPACEWAR_EPSS = (0x18591000, 0x1000, 0x18592000, 0x1000, 0x18593000, 0x1000)
 # USB (bsd/dev/sweet_usb.c): SM7325 gcc-yupik offsets differ from sweet's
 # gcc-sdmmagpie, the HS PHY is snps-femto (no QUSB2 block), and the DWC3 is
 # behind apps_smmu stream 0xe0 (live DT ssusb iommus <0x1a 0xe0>).
-SPACEWAR_USB = dict(gdscr_off=0x10f004, master_off=0x0f010, cfgnoc_off=0x0f07c, smmu_sid=0xe0)
+# offsets from the GCC base 0x100000 (gcc-yupik.c halt_reg / gdsc@10f004 -> 0xf004)
+SPACEWAR_USB = dict(gdscr_off=0x0f004, master_off=0x0f010, cfgnoc_off=0x0f07c, smmu_sid=0xe0)
 
 BOOT_MANIFEST_HASH = hashlib.sha384(b'sweet boot manifest').digest()
 
