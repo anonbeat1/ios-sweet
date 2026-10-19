@@ -12,10 +12,10 @@ index d411e72b36e6..2b9fa4a30566 100644
  bsd/dev/sweet_usb.c			standard
 diff --git a/bsd/dev/sweet_smmu.c b/bsd/dev/sweet_smmu.c
 new file mode 100644
-index 000000000000..325cc1b49543
+index 000000000000..159863ef5940
 --- /dev/null
 +++ b/bsd/dev/sweet_smmu.c
-@@ -0,0 +1,198 @@
+@@ -0,0 +1,199 @@
 +/*
 + * SWEET Spacewar apps_smmu: a translating stage-1 context bank that
 + * identity-maps DRAM, shared by the DMA masters the SWEET drivers drive.
@@ -38,6 +38,7 @@ index 000000000000..325cc1b49543
 +#include <sys/param.h>
 +#include <sys/systm.h>
 +#include <sys/errno.h>
++#include <kern/clock.h>
 +#include <machine/machine_routines.h>
 +#include <arm/caches_internal.h>
 +#include <vm/pmap.h>
