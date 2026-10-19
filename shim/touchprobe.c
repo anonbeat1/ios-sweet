@@ -672,6 +672,15 @@ static void gsi_tests(void)
 	con_clear(BLUE);
 	heartbeat("SMMU cb7 + GPII 0 up, one NOP done", 1);
 	return;
+#elif TOUCH_TEST == 6
+	/* t5 survived 110 s; every crashing run had released the FT3680 reset here */
+	con_clear(BLUE);
+	con_hex2("g81", "before ctl=", rd(TLMM_GPIO(81)), "icfg=", rd(TLMM_GPIO(81) + 8));
+	ts_reset(0);
+	udelay(1000);
+	ts_reset(1);
+	heartbeat("t5 + FT3680 reset released", 1);
+	return;
 #endif
 	dma_tx[0] = 0x55, dma_tx[1] = dma_tx[2] = dma_tx[3] = 0;
 	dc_civac(dma_tx, sizeof(dma_tx));
@@ -732,7 +741,9 @@ static void heartbeat(const char *what, int gsi)
 		(void)fsr;
 		char l[] = "t=000s";
 		l[2] = '0' + t / 100, l[3] = '0' + t / 10 % 10, l[4] = '0' + t % 10;
-		con_hex2(l, "gpi irq|err=", gpi, "gpio81 io=", rd(TLMM_GPIO(81) + 4));
+		con_hex2(l, "gpi=", gpi, "g81=", rd(TLMM_GPIO(81) + 4) << 16 | rd(TLMM_GPIO(81) + 0xc));
+		if (t == 10)	/* gpio81 ctl, intr_cfg (TLMM +0x8): is its interrupt routed anywhere? */
+			con_hex2(" g81", "ctl=", rd(TLMM_GPIO(81)), "icfg=", rd(TLMM_GPIO(81) + 8));
 	}
 	con_str("BEAT", "3 min survived");
 }

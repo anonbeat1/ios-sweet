@@ -287,6 +287,11 @@ Separate effort from sweet; sweet handoff below is unchanged.
     touch15 bisection with a 10 s heartbeat for 3 min (time, SMMU cb7 FSR/GFSR, GPII irq|err, gpio81 io):
     `shim/out/spacewar-touch15-t4.img` = rails + pins + SE13 clock only, no SMMU/GPI; `shim/out/spacewar-touch15-t5.img` =
     SMMU cb7 + GPII 0 up + one NOP, then idle.
+    **touch15 result (19:40)**: t4 (rails/pins/clock only) alive at 90 s, t5 (SMMU cb7 + GPII 0 + NOP, then idle) alive at
+    110 s, FSR/GFSR/GPII clean => neither the rails nor the SMMU/GPI setup causes the CrashDump. Every crashing run released
+    the FT3680 reset (ts_reset 0 -> 1) shortly before (touch14: right after the NOP; touch5/6: start of the boot-id loop);
+    t5 returns before that. Hypothesis: the FT3680 coming out of reset (its IRQ on gpio81?) triggers the reset.
+    touch16 (`shim/out/spacewar-touch16-t6.img`): t5 + reset pulse released, heartbeat with gpio81 ctl/intr_cfg/io/status.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
