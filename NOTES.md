@@ -222,6 +222,12 @@ Separate effort from sweet; sweet handoff below is unchanged.
     SPI. Buffers are in 0xA00B0000 (System RAM in Android's iomem). Not known yet which doorbell triggers it.
     touch6 (`shim/out/spacewar-touch6-step.img`): first transfer stepped: "DB rx" + 3 s, RX doorbell, 2 s, dump (ch/ev ctx+RP,
     GPII irq/err/glob/gen, GENI, SMMU FSR/FAR), "DB tx" + 3 s, TX doorbell, 2 s, dump.
+    **touch6 result (19:05, photo)**: RX doorbell (wp 0xA00B1410) is harmless: 2 s later ch0 rp 0xA00B1C00 (tx ring base),
+    ch1 rp 0xA00B1400 (RX TRE pending, expected), ev rp unchanged, GPII irq/err/glob/gen 0, GENI status 0, SMMU cb FSR 0x400
+    (= FORMAT field only, no fault; FAR/FSYNR0 stale). Then "DB tx wp=A00B1C30" and **CrashDump right at the TX doorbell**
+    (CONFIG0 + GO + DMA TREs). Unknown whether the TRE fetch (DMA read), the SE programming or the SPI GO kills it.
+    touch7 (`shim/out/spacewar-touch7-nop.img`): after gpi_setup, TX ring steps with 3 s / 2 s pauses + dumps: (1) NOP TRE with
+    IEOB (GPI fetch + event write only), (2) CONFIG0 alone with IEOB, no chain; then the stepped boot-id transfer as touch6.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON

@@ -575,6 +575,25 @@ static int gsi_xfer(const uint8_t *tx, uint8_t *rx, unsigned n)
 	return rc;
 }
 
+/*
+ * touch6: the RX doorbell is harmless, the TX doorbell (CONFIG0 + GO + DMA)
+ * ends in CrashDump. Split it: a NOP TRE (GPI fetch + event write, no SE),
+ * then CONFIG0 alone (SE programming, no bus traffic), each with IEOB.
+ */
+static void gsi_step(const char *what, uint32_t d0, uint32_t d2, uint32_t d3)
+{
+	con_hex2(what, "wp=", (uint32_t)(uintptr_t)&tx_ring[(tx_wp + 1) % NTRE], "in 3 s", 0);
+	udelay(3000000);
+	ring_put(tx_ring, &tx_wp, d0, 0, d2, d3);
+	wr(CH_DB(0), (uint32_t)(uintptr_t)&tx_ring[tx_wp]);
+	udelay(2000000);
+	dc_civac(ev_ring, sizeof(ev_ring));
+	gsi_dump("  ->");
+	con_hex2(" ev[0]", "d2=", ev_ring[ev_rp].d[2], "d3=", ev_ring[ev_rp].d[3]);
+	while ((uint32_t)(uintptr_t)&ev_ring[ev_rp] != rd(EV_CTX + 0x10) && ev_rp < NTRE - 1)
+		ev_rp++;
+}
+
 /* Returns 0 when transfers can go through the GPI. */
 static int touch_gsi_init(void)
 {
@@ -589,6 +608,9 @@ static int touch_gsi_init(void)
 		smmu_fault_report();
 		return -1;
 	}
+	gsi_step("NOP", 0, 0, 1u << 16 | 1u << 8);			/* NOP, ieob */
+	gsi_step("CONFIG0", 3u << 24 | (8 - 4), 4, 2u << 20 | 2u << 16 | 1u << 8);	/* ieob, no chain */
+	gsi_cfg_done = 1;
 	use_gsi = 1;
 	return 0;
 }
