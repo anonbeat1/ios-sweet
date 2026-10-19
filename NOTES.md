@@ -47,10 +47,17 @@ Separate effort from sweet; sweet handoff below is unchanged.
   INTID 18 is something else and fired once enabled. (2) **EL1 physical timer access UNDEFs** (hypervisor): XNU must
   use only the virtual timer (sweet already does; ADT needs INTID 27).
   **Probe 6** (7750d70): UNDEF again, image at 0xA0080000 (+0x28B8) = `msr CNTP_CTL_EL0` after the vtimer window:
-  confirms *any* EL1 CNTP_* access UNDEFs. **Probe 7**: no CNTP access at all under SPACEWAR.
+  confirms *any* EL1 CNTP_* access UNDEFs. **Probe 7** (45e914d, photo): **all milestone-3 checks pass, same as sweet**:
+  image 0xA00B0000-0xA00B8000 (ABL load address varies per boot: 0xA0080000 / 0xA00B0000), 16K MMU rc=0 (tg16=1,
+  PARange=2 40-bit, TCR 0x1409CB51C), PAR img WB / fb 0xE1001000 NC / gic Device / 12G fault; fill fb 189 ms -> 3.4 ms,
+  mem loop 39 ms -> 0.43 ms; PSCI 1.1, SMCCC 1.1; GICD_CTLR 0x53, GICR 0x17A60000 waker 0; **vtimer INTID 27: 30 IRQs/300 ms,
+  SGI1 10/10**, ICC_CTLR 0x8400.
+  => Spacewar vs sweet for XNU: fb 0xE1000000 (no kick, never touch MDP), vtimer INTID 27, no EL1 CNTP_*, 8 CPUs via PSCI
+  (MPIDR 0x000..0x700, cpu0 = A55), different RAM map (physBase must avoid the reserved list above).
+- Next: temp root (Magisk-patched boot via fastboot boot) -> partition backups + live FDT//proc/iomem (real RAM size and
+  dynamic reserved regions), then mkadt/mkpayload for Spacewar and a first XNU boot with cpus=1.
   Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
-- Next: (4) temp root (Magisk-patched boot via fastboot boot)
-  to pull live FDT, /proc/iomem and partition backups (persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots).
+  Partition backups to take: persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots.
 
 ## Agent handoff / active work (2026-10-15, latest)
 
