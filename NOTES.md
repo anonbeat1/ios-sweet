@@ -331,6 +331,17 @@ Separate effort from sweet; sweet handoff below is unchanged.
     Next: port to XNU for Spacewar (replace sweet's Goodix/I2C path when ADT says so): SMMU cb for SIDs 0x56/0x43, GPI
     GPII 0 + SE13 GSI, FT3680 boot + firmware download, polling thread on gpio81 -> sweet_hid_touch(). Firmware must stay
     out of git: carry it in the ADT (e.g. mkadt.py --spacewar --ft-fw <.i>) rather than in the kernel build.
+  - **XNU touch port (patch 0089, `0089-sweet-spacewar-fts-spi-touch.patch`, applies on 0088, syntax-checked; not built/booted yet)**:
+    new `bsd/dev/sweet_fts_spi.c` ports the shim path to the kernel: ml_io_map GCC/TLMM/SE13/gpi_dma1/apps_smmu; a
+    128 KiB kmem_alloc_contig region capped below 4 GiB (max_pnum; GPI TRE/ring-base fields are 32-bit) holding the SMMU
+    L1 table, 3 GPI rings and 2 SPI data buffers, phys via pmap_find_phys (sweet_ufs.c pattern). SMMU stage-1 cb
+    identity-maps DRAM for SIDs 0x56 (GPI) and 0x43 (QUP wrapper); GPII 0 EV+CH0/CH1 polled; gsi_xfer full-duplex; FT3680
+    boot id + firmware download (ECC vs host) + register 0x01 touch poll on gpio81 -> sweet_hid_touch. `sweet_touch_init`
+    routes to it when ADT /sweet-fts-spi exists (sweet keeps Goodix). `sweet_rpmh.c` whitelist extended for ldoc8
+    1.7-1.9 V and ldoc3 3.0-3.4 V. `tools/mkadt.py --spacewar --ft-fw FILE.i` reads the Focaltech .i and puts the
+    119284-byte blob in ADT /sweet-fts-spi "firmware" (out of git). Syntax-checked with a stub prelude; CI is authoritative.
+    Next: CI build on anonbeat1/ios-sweet (patch 0089), then boot `spacewar-xnu-0089` with an ADT built via
+    `mkadt.py --spacewar --ft-fw <.i>` and touch enabled; verify SpringBoard sees touches (unlock, home gesture).
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON

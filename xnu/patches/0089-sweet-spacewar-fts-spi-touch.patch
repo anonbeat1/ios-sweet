@@ -1,0 +1,823 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 663013104e82..872df7f9e935 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -108,6 +108,7 @@ bsd/dev/sweet_ufs.c			standard
+ bsd/dev/sweet_sample.c			standard
+ bsd/dev/sweet_keys.c			standard
+ bsd/dev/sweet_touch.c			standard
++bsd/dev/sweet_fts_spi.c			standard
+ bsd/dev/sweet_rpmh.c			standard
+ bsd/dev/sweet_spmi.c			standard
+ bsd/dev/sweet_usb.c			standard
+diff --git a/bsd/dev/sweet_fts_spi.c b/bsd/dev/sweet_fts_spi.c
+new file mode 100644
+index 000000000000..318faada4ffc
+--- /dev/null
++++ b/bsd/dev/sweet_fts_spi.c
+@@ -0,0 +1,752 @@
++/*
++ * SWEET Spacewar (Nothing Phone (1)) touch: Focaltech FT3680 on QUP SE13 SPI.
++ *
++ * Port of the shim bring-up (shim/touchprobe.c, NOTES.md touch5-18). SE13
++ * runs TZ-loaded GSI firmware (FIFO interface disabled, the switch is
++ * XPU-protected), so every transfer goes through gpi_dma1 GPII 0 (static
++ * GPII: the dmas cell 2 of the SE13 node). The GPI ring/event stream (SID
++ * 0x56) and the QUP wrapper's data stream (SID 0x43) both need a translating
++ * apps_smmu context bank: the hypervisor turns bypass into fault, and an
++ * unmatched SID 0x43 during a transfer resets the SoC. One stage-1 bank with
++ * an identity map of DRAM serves both.
++ *
++ * The FT3680 has no flash: its 119284-byte app firmware is downloaded into
++ * PRAM on every boot (focaltech_flash.c). The blob is not part of the kernel:
++ * tools/mkadt.py --spacewar --ft-fw puts it in ADT /sweet-fts-spi "firmware".
++ * All polled; one kernel thread. Started by sweet_touch_init() when ADT
++ * /sweet-fts-spi exists (sweet keeps its Goodix/I2C path).
++ *
++ * DMA is one physically contiguous allocation kept below 4 GiB (the GPI TRE
++ * address fields we use are 32-bit). The GPI is not cache coherent, so the
++ * rings and buffers are cleaned/invalidated by physical address around each
++ * use; the SMMU identity map makes IOVA == physical.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/errno.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <kern/sched_prim.h>
++#include <machine/machine_routines.h>
++#include <arm/caches_internal.h>
++#include <vm/pmap.h>
++#include <vm/vm_kern.h>
++#include <pexpert/pexpert.h>
++#include <pexpert/device_tree.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
++extern kern_return_t thread_terminate(thread_t);
++extern kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
++extern void thread_deallocate(thread_t);
++extern int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
++extern void sweet_hid_touch(int finger, int down, int x, int y);
++void sweet_fts_spi_start(void);
++
++#define GCC_PA          0x00100000u
++#define GCC_SIZE        0x60000u
++#define GCC_VOTE        0x52008u        /* APCS branch vote: 27 SE13, 21/20 wrap1 AHB */
++#define GCC_SE13_CBCR   0x185fcu
++#define TLMM_PA         0x0f100000u
++#define TLMM_SIZE       0x6a000u        /* up to gpio 105 (0x69xxx) */
++#define SE_PA           0x00a94000u     /* qupv3_se13_spi */
++#define SE_SIZE         0x4000u
++#define GPI_PA          0x00a00000u     /* gpi_dma1 gpi-top */
++#define GPI_SIZE        0x60000u
++#define SMMU_PA         0x15000000u     /* apps_smmu */
++#define SMMU_SIZE       0x100000u
++
++#define GPIO(n)         ((uint32_t)(n) * 0x1000u)      /* ctl; +4 io */
++#define PIN_IRQ         81
++#define PIN_RESET       105
++
++/* GPII 0 register window offsets, relative to gpi-top (shim G(x) = x-0x10000) */
++#define GB(x)           ((x) - 0x10000u)
++#define CH_CTX(k)       GB(0x20000u + 0x80u * (k))
++#define EV_CTX          GB(0x21000u)
++#define CH_DB(k)        GB(0x22000u + 0x8u * (k))
++#define EV_DB           GB(0x22100u)
++#define CH_CMD          GB(0x23008u)
++#define EV_CMD          GB(0x23010u)
++#define IEOB_CLR        GB(0x230c0u)
++#define SE_SEID         5u              /* SE13 = wrapper 1 SE5 */
++
++#define SMMU_SID_GPI    0x56u           /* gpi_dma1 iommus */
++#define SMMU_SID_QUP    0x43u           /* qupv3_1 wrapper iommus */
++
++#define SE(o)           (o)             /* SE register offsets are absolute in its window */
++#define NTRE            64u             /* dmas <... 0x40 ...> */
++#define DMA_MAX         (32u * 1024u)   /* firmware packet (FTS_FLASH_PACKET_LENGTH_SPI) */
++
++/* contiguous DMA layout (all < 4 GiB, IOVA == PA via the identity map) */
++#define OFF_L1          0x0000u         /* SMMU level-1 table, 4 KiB aligned */
++#define OFF_EV          0x1000u         /* event ring, NTRE*16 = 1 KiB aligned */
++#define OFF_TX          0x1400u
++#define OFF_RX          0x1800u
++#define OFF_DTX         0x2000u         /* tx data buffer */
++#define OFF_DRX         0xa000u         /* rx data buffer */
++#define DMA_REGION      0x20000u        /* 128 KiB */
++
++#define TOUCH_MAX       10u
++
++struct tre { uint32_t d[4]; };
++
++static struct {
++	vm_offset_t gcc, tlmm, se, gpi, smmu;
++	vm_offset_t dma;        /* kernel VA of the contiguous region */
++	uint64_t dma_pa;        /* its physical base (< 4 GiB) */
++	int smmu_cb;
++	unsigned tx_wp, rx_wp, ev_rp;
++	bool cfg_done, dead;
++	uint32_t active;        /* per-finger down mask */
++	int x[TOUCH_MAX], y[TOUCH_MAX];
++	const uint8_t *fw;
++	unsigned fw_len;
++} ft;
++static int ft_sleep_chan;
++
++/* ---- MMIO + timing ---- */
++
++static uint32_t
++rd(vm_offset_t base, uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(base + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return v;
++}
++
++static void
++wr(vm_offset_t base, uint32_t off, uint32_t val)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(base + off) = val;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
++static void
++wr64(vm_offset_t base, uint32_t off, uint64_t val)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint64_t *)(base + off) = val;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
++static void
++ft_wait(unsigned ms)
++{
++	uint64_t deadline;
++	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
++	(void)assert_wait_deadline(&ft_sleep_chan, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++/* GPI is not cache coherent: clean+invalidate by physical address */
++static void
++dma_flush(uint32_t off, unsigned len)
++{
++	flush_dcache64((addr64_t)(ft.dma_pa + off), len, TRUE);
++}
++
++static inline vm_offset_t dva(uint32_t off) { return ft.dma + off; }
++static inline uint32_t dpa(uint32_t off) { return (uint32_t)(ft.dma_pa + off); }
++
++/* ---- apps_smmu: translating stage-1 context bank for SIDs 0x56 and 0x43 ---- */
++
++static void
++smmu_map_sid(unsigned sid, unsigned nsmr, int *free_from)
++{
++	for (unsigned i = (unsigned)*free_from; i < nsmr && i < 128; i++) {
++		if (rd(ft.smmu, 0x800 + 4 * i) & (1u << 31)) {
++			continue;
++		}
++		wr(ft.smmu, 0xc00 + 4 * i, (uint32_t)ft.smmu_cb);  /* S2CR translate -> cb */
++		wr(ft.smmu, 0x800 + 4 * i, 1u << 31 | sid);        /* SMR valid, mask 0 */
++		*free_from = (int)i + 1;
++		printf("SWEET FTS: SMMU sid %#x -> smr %u s2cr %#x\n", sid, i,
++		    rd(ft.smmu, 0xc00 + 4 * i));
++		return;
++	}
++	printf("SWEET FTS: SMMU no free SMR for sid %#x\n", sid);
++}
++
++static int
++smmu_setup(void)
++{
++	uint32_t id0 = rd(ft.smmu, 0x20), id1 = rd(ft.smmu, 0x24);
++	unsigned pgshift = (id1 >> 31) ? 16 : 12;
++	unsigned ncb = id1 & 0xff, ns2cb = (id1 >> 16) & 0xff, nsmr = id0 & 0xff;
++	vm_offset_t gr1 = ft.smmu + (1u << pgshift);
++	vm_offset_t cbase = ft.smmu + ((1u << (((id1 >> 28) & 7) + 1)) << pgshift);
++
++	/* context banks already used by a translating stream match group */
++	uint32_t used[8] = { 0 };
++	int free_smr = -1;
++	for (unsigned i = 0; i < nsmr && i < 128; i++) {
++		uint32_t smr = rd(ft.smmu, 0x800 + 4 * i), s2cr = rd(ft.smmu, 0xc00 + 4 * i);
++		if (!(smr & (1u << 31))) {
++			if (free_smr < 0) {
++				free_smr = (int)i;
++			}
++			continue;
++		}
++		if (((s2cr >> 16) & 3) == 0) {
++			used[(s2cr & 0xff) / 32] |= 1u << ((s2cr & 0xff) % 32);
++		}
++	}
++	ft.smmu_cb = -1;
++	for (unsigned c = ns2cb; c < ncb && ft.smmu_cb < 0; c++) {
++		if (!(used[c / 32] & (1u << (c % 32))) &&
++		    !(rd(cbase + ((vm_offset_t)c << pgshift), 0) & 1)) {
++			ft.smmu_cb = (int)c;
++		}
++	}
++	if (ft.smmu_cb < 0 || free_smr < 0) {
++		printf("SWEET FTS: SMMU no free cb/smr (cb=%d smr=%d)\n", ft.smmu_cb, free_smr);
++		return ENODEV;
++	}
++
++	/* identity map DRAM 0x80000000..0x27fffffff, level-1 1 GiB blocks, Normal NC */
++	volatile uint64_t *l1 = (volatile uint64_t *)dva(OFF_L1);
++	for (unsigned i = 0; i < 512; i++) {
++		l1[i] = 0;
++	}
++	for (unsigned i = 2; i < 10; i++) {
++		l1[i] = (uint64_t)i << 30 | 1u << 10 | 2u << 8 | 1u << 6 | 1;  /* AF, SH outer, AP RW, block */
++	}
++	dma_flush(OFF_L1, 4096);
++
++	vm_offset_t cb = cbase + ((vm_offset_t)ft.smmu_cb << pgshift);
++	unsigned asid = (unsigned)ft.smmu_cb;
++	wr(cb, 0x0, 0);                                  /* SCTLR off while programming */
++	wr(cb, 0x58, 0xffffffffu);                       /* FSR clear */
++	wr(gr1, 0x800 + 4 * (unsigned)ft.smmu_cb, 1);    /* CBA2R VA64 */
++	wr(gr1, 4 * (unsigned)ft.smmu_cb, 1u << 16 | 0xfu << 12 | 3u << 8);  /* CBAR S1+S2bypass WB NSH */
++	wr(cb, 0x10, 7u << 15 | 2);                      /* TCR2: SEP upstream, PA 40-bit */
++	wr(cb, 0x30, 25 | 1u << 23);                     /* TCR: T0SZ 25, 4K, NC walks, EPD1 */
++	wr(cb, 0x34, asid);                              /* CONTEXTIDR */
++	wr64(cb, 0x20, (uint64_t)dpa(OFF_L1) | (uint64_t)asid << 48);  /* TTBR0 */
++	wr64(cb, 0x28, 0);
++	wr(cb, 0x38, 0x44);                              /* MAIR0 attr0 Normal NC */
++	wr(cb, 0x618, 0);                                /* TLBIALL */
++	wr(cb, 0x7f0, 0);                                /* TLBSYNC */
++	for (int t = 0; t < 100000 && (rd(cb, 0x7f4) & 1); t++) {
++		delay(1);
++	}
++	wr(cb, 0x0, 1u << 6 | 1u << 5 | 1u << 2 | 1u << 1 | 1);  /* CFIE CFRE AFE TRE M */
++
++	smmu_map_sid(SMMU_SID_GPI, nsmr, &free_smr);
++	smmu_map_sid(SMMU_SID_QUP, nsmr, &free_smr);
++	printf("SWEET FTS: SMMU cb %d sctlr %#x ttbr0 %#x\n", ft.smmu_cb,
++	    rd(cb, 0x0), rd(cb, 0x20));
++	return ((rd(cb, 0x0) & 1) && free_smr > 0) ? 0 : ENODEV;
++}
++
++/* ---- gpi_dma1 GPII 0: event + two channels, polled ---- */
++
++static int
++gpi_cmd(uint32_t reg, uint32_t cmd, uint32_t ctx, uint32_t state, const char *what)
++{
++	wr(ft.gpi, reg, cmd);
++	for (int t = 0; t < 250000; t++) {
++		if (((rd(ft.gpi, ctx) >> 20) & 0xf) == state) {
++			wr(ft.gpi, GB(0x230a0u), rd(ft.gpi, GB(0x23090u)));
++			wr(ft.gpi, GB(0x230a4u), rd(ft.gpi, GB(0x23094u)));
++			return 0;
++		}
++		delay(1);
++	}
++	printf("SWEET FTS: GPI %s timeout ctx %#x glob %#x err %#x\n", what,
++	    rd(ft.gpi, ctx), rd(ft.gpi, GB(0x23100u)), rd(ft.gpi, GB(0x23200u)));
++	return EIO;
++}
++
++static int
++gpi_setup(void)
++{
++	/* geni_se_select_gsi_mode on SE13 */
++	wr(ft.se, 0xe1c, 0);
++	wr(ft.se, 0x644, rd(ft.se, 0x644) & ~1u);
++	wr(ft.se, 0x614, rd(ft.se, 0x614) & ~(1u | 1u << 26 | 1u << 27 | 1u << 30));
++	wr(ft.se, 0x618, 0xffffffffu), wr(ft.se, 0x648, 0xffffffffu);
++	wr(ft.se, 0xc44, 0xffffffffu), wr(ft.se, 0xd44, 0xffffffffu);
++	wr(ft.se, 0x258, rd(ft.se, 0x258) | 1u);
++	wr(ft.se, 0xe18, rd(ft.se, 0xe18) | 0xfu);
++
++	/* gpi_config_interrupts DEFAULT_IRQ_SETTINGS (no GIC wiring: we poll) */
++	wr(ft.gpi, GB(0x23088u), 0x4f), wr(ft.gpi, GB(0x230b8u), 1);
++	wr(ft.gpi, GB(0x23098u), 3), wr(ft.gpi, GB(0x2309cu), 1);
++	wr(ft.gpi, GB(0x23108u), 1), wr(ft.gpi, GB(0x23120u), 0xf);
++	wr(ft.gpi, GB(0x23188u), 0), wr(ft.gpi, GB(0x2318cu), 0);
++	wr(ft.gpi, GB(0x23400u), 0), wr(ft.gpi, GB(0x23404u), 0);
++	wr(ft.gpi, GB(0x23180u), 1), wr(ft.gpi, GB(0x23200u), 0);
++
++	memset((void *)dva(OFF_EV), 0, NTRE * 16);
++	memset((void *)dva(OFF_TX), 0, NTRE * 16);
++	memset((void *)dva(OFF_RX), 0, NTRE * 16);
++	dma_flush(OFF_EV, NTRE * 16), dma_flush(OFF_TX, NTRE * 16), dma_flush(OFF_RX, NTRE * 16);
++
++	/* event ring */
++	if (gpi_cmd(EV_CMD, 0, EV_CTX, 1, "EV ALLOC")) {
++		return EIO;
++	}
++	wr(ft.gpi, EV_CTX + 0x0, 16u << 24 | 1u << 16 | 2);  /* el 16, IRQ, GPI_EV */
++	wr(ft.gpi, EV_CTX + 0x4, NTRE * 16);
++	wr(ft.gpi, EV_CTX + 0x8, dpa(OFF_EV)), wr(ft.gpi, EV_CTX + 0xc, 0);
++	wr(ft.gpi, EV_DB + 0x4, 0);
++	wr(ft.gpi, EV_CTX + 0x20, 0), wr(ft.gpi, EV_CTX + 0x28, 0), wr(ft.gpi, EV_CTX + 0x2c, 0);
++	wr(ft.gpi, EV_CTX + 0x30, 0), wr(ft.gpi, EV_CTX + 0x34, 0);
++	__asm__ volatile("dsb sy" ::: "memory");
++	wr(ft.gpi, EV_DB, dpa(OFF_EV) + (NTRE - 1) * 16);
++
++	/* ch0 TX (dir out), ch1 RX (dir in), SPI on SE5 */
++	uint32_t roff[2] = { OFF_TX, OFF_RX };
++	for (unsigned k = 0; k < 2; k++) {
++		if (gpi_cmd(CH_CMD, k, CH_CTX(k), 1, k ? "CH1 ALLOC" : "CH0 ALLOC")) {
++			return EIO;
++		}
++		wr(ft.gpi, CH_CTX(k) + 0x0, 16u << 24 | (k ? 0u : 1u) << 3 | 2);
++		wr(ft.gpi, CH_CTX(k) + 0x4, NTRE * 16);
++		wr(ft.gpi, CH_CTX(k) + 0x8, dpa(roff[k])), wr(ft.gpi, CH_CTX(k) + 0xc, 0);
++		wr(ft.gpi, CH_DB(k) + 0x4, 0);
++		wr(ft.gpi, CH_CTX(k) + 0x60, (k ? 0u : 1u) << 16 | 1u << 4 | SE_SEID);
++		wr(ft.gpi, CH_CTX(k) + 0x64, 0), wr(ft.gpi, CH_CTX(k) + 0x68, 0), wr(ft.gpi, CH_CTX(k) + 0x6c, 0);
++		wr(ft.gpi, CH_CTX(k) + 0x5c, 1);  /* QOS */
++	}
++	__asm__ volatile("dsb sy" ::: "memory");
++	for (unsigned k = 0; k < 2; k++) {
++		if (gpi_cmd(CH_CMD, 1u << 24 | k, CH_CTX(k), 2, k ? "CH1 START" : "CH0 START")) {
++			return EIO;
++		}
++	}
++	printf("SWEET FTS: GPII 0 ch0 %#x ch1 %#x ev %#x\n",
++	    rd(ft.gpi, CH_CTX(0)), rd(ft.gpi, CH_CTX(1)), rd(ft.gpi, EV_CTX));
++	return 0;
++}
++
++static void
++ring_put(uint32_t roff, unsigned *wp, uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3)
++{
++	volatile struct tre *t = (volatile struct tre *)(dva(roff) + *wp * 16);
++	t->d[0] = d0, t->d[1] = d1, t->d[2] = d2, t->d[3] = d3;
++	dma_flush(roff + *wp * 16, 16);
++	*wp = (*wp + 1) % NTRE;
++}
++
++static void
++ev_recycle(void)
++{
++	dma_flush(OFF_EV, NTRE * 16);
++	while (dpa(OFF_EV) + ft.ev_rp * 16 != rd(ft.gpi, EV_CTX + 0x10)) {
++		ft.ev_rp = (ft.ev_rp + 1) % NTRE;
++	}
++	wr(ft.gpi, EV_DB, dpa(OFF_EV) + ((ft.ev_rp + NTRE - 1) % NTRE) * 16);
++	wr(ft.gpi, IEOB_CLR, 1);
++}
++
++/* one full-duplex SPI transfer (<= DMA_MAX bytes), CONFIG0 chained on the first */
++static int
++gsi_xfer(const uint8_t *tx, uint8_t *rx, unsigned n)
++{
++	if (ft.dead || n > DMA_MAX) {
++		return EIO;
++	}
++	volatile uint8_t *dt = (volatile uint8_t *)dva(OFF_DTX), *dr = (volatile uint8_t *)dva(OFF_DRX);
++	for (unsigned i = 0; i < n; i++) {
++		dt[i] = tx[i], dr[i] = 0xee;
++	}
++	dma_flush(OFF_DTX, n), dma_flush(OFF_DRX, n);
++
++	ring_put(OFF_RX, &ft.rx_wp, dpa(OFF_DRX), 0, n, 1u << 20);  /* DMA_W_BUF */
++	if (!ft.cfg_done) {
++		/* CONFIG0: tx/rx pack, mode 0, 8-bit; clk idx 0 (XO) / 4 = 4.8 MHz; chain */
++		ring_put(OFF_TX, &ft.tx_wp, 3u << 24 | (8 - 4), 0, 0u << 16 | 4, 2u << 20 | 2u << 16 | 1);
++		ft.cfg_done = true;
++	}
++	ring_put(OFF_TX, &ft.tx_wp, 3, 0, n, 2u << 20 | 1u << 11 | 1);  /* GO full duplex cs0 link_rx chain */
++	ring_put(OFF_TX, &ft.tx_wp, dpa(OFF_DTX), 0, n, 1u << 20 | 1u << 9);  /* DMA_W_BUF ieot */
++
++	uint32_t rx_want = dpa(OFF_RX) + ft.rx_wp * 16, tx_want = dpa(OFF_TX) + ft.tx_wp * 16;
++	wr(ft.gpi, CH_DB(1), rx_want);
++	wr(ft.gpi, CH_DB(0), tx_want);
++
++	int rc = EIO;
++	for (int t = 0; t < 500000; t++) {  /* 32 KiB at 4.8 MHz ~= 55 ms */
++		if (rd(ft.gpi, CH_CTX(1) + 0x10) == rx_want && rd(ft.gpi, CH_CTX(0) + 0x10) == tx_want) {
++			rc = 0;
++			break;
++		}
++		delay(1);
++	}
++	delay(150);  /* focaltech CS_HIGH_DELAY */
++	dma_flush(OFF_DRX, n);
++	for (unsigned i = 0; i < n; i++) {
++		rx[i] = dr[i];
++	}
++	ev_recycle();
++	if (rc) {
++		printf("SWEET FTS: xfer timeout n=%u ch0 %#x ch1 %#x geni %#x\n", n,
++		    rd(ft.gpi, CH_CTX(0) + 0x10), rd(ft.gpi, CH_CTX(1) + 0x10), rd(ft.se, 0x40));
++	}
++	return rc;
++}
++
++/* ---- Focaltech SPI framing (focaltech_spi.c) ---- */
++
++static uint8_t ft_buf[DMA_MAX];
++
++static uint16_t
++ft_crc(const uint8_t *d, unsigned len)
++{
++	uint16_t crc = 0xffff;
++	for (unsigned i = 0; i < len; i++) {
++		crc ^= d[i];
++		for (int j = 0; j < 8; j++) {
++			crc = (crc & 1) ? (uint16_t)((crc >> 1) ^ 0x8408) : crc >> 1;
++		}
++	}
++	return crc;
++}
++
++/* fts_write: [cmd, 0x00, len-1 BE16, 3 dummy if data, data]; status rx[3] & 0xA0 == 0 */
++static int
++ft_write(const uint8_t *buf, unsigned len)
++{
++	unsigned dlen = len - 1;
++	for (int r = 0; r < 3; r++) {
++		unsigned n = 0;
++		ft_buf[n++] = buf[0], ft_buf[n++] = 0x00, ft_buf[n++] = dlen >> 8, ft_buf[n++] = dlen & 0xff;
++		if (dlen) {
++			ft_buf[n++] = 0, ft_buf[n++] = 0, ft_buf[n++] = 0;
++			for (unsigned i = 1; i < len; i++) {
++				ft_buf[n++] = buf[i];
++			}
++		}
++		int rc = gsi_xfer(ft_buf, ft_buf, n);  /* rx overwrites ft_buf */
++		delay(150);
++		if (!rc && !(ft_buf[3] & 0xa0)) {
++			return 0;
++		}
++	}
++	return EIO;
++}
++
++/* fts_read: [cmd, 0xA0, len BE16, 3 dummy, data, CRC16 kermit LE] */
++static int
++ft_read(uint8_t cmd, uint8_t *data, unsigned dlen)
++{
++	unsigned n = 7 + dlen + 2;
++	for (int r = 0; r < 3; r++) {
++		for (unsigned i = 0; i < n; i++) {
++			ft_buf[i] = 0;
++		}
++		ft_buf[0] = cmd, ft_buf[1] = 0xa0, ft_buf[2] = dlen >> 8, ft_buf[3] = dlen & 0xff;
++		int rc = gsi_xfer(ft_buf, ft_buf, n);
++		delay(150);
++		if (rc || (ft_buf[3] & 0xa0)) {
++			continue;
++		}
++		if (ft_crc(&ft_buf[7], dlen) != (uint16_t)(ft_buf[7 + dlen + 1] << 8 | ft_buf[7 + dlen])) {
++			continue;
++		}
++		for (unsigned i = 0; i < dlen; i++) {
++			data[i] = ft_buf[7 + i];
++		}
++		return 0;
++	}
++	return EIO;
++}
++
++/* fts_ecc_cal_host: AL2 FCS over big-endian 16-bit words */
++static uint16_t
++ft_ecc(const uint8_t *d, unsigned len)
++{
++	uint16_t ecc = 0;
++	for (unsigned i = 0; i < len; i += 2) {
++		ecc ^= (uint16_t)(d[i] << 8 | d[i + 1]);
++		for (int j = 0; j < 16; j++) {
++			ecc = (ecc & 1) ? (uint16_t)((ecc >> 1) ^ ((1u << 15) + (1u << 10) + (1u << 3))) : ecc >> 1;
++		}
++	}
++	return ecc;
++}
++
++/* fts_enter_into_boot: reset to boot, 0x55, read boot id 0x90 (CRC), expect 0x5662 */
++static int
++ft_enter_boot(void)
++{
++	for (int i = 0; i < 3; i++) {
++		wr(ft.tlmm, GPIO(PIN_RESET) + 4, 0);  /* reset low */
++		ft_wait(1);
++		wr(ft.tlmm, GPIO(PIN_RESET) + 4, 2);  /* reset high (bit1 = out value) */
++		ft_wait(8 + i);
++		const uint8_t start = 0x55;
++		(void)ft_write(&start, 1);
++		ft_wait(8);
++		uint8_t id[2] = { 0 };
++		if (!ft_read(0x90, id, 2) && id[0] == 0x56 && id[1] == 0x62) {
++			printf("SWEET FTS: boot id 0x%02x%02x\n", id[0], id[1]);
++			return 0;
++		}
++	}
++	return EIO;
++}
++
++/*
++ * FT3680 app firmware download (focaltech_flash.c, upgrade_setting_nf
++ * {0x56,0x62,...,length_coefficient 4, spi_pe 0, ecc_delay 5, no DRAM}).
++ */
++static int
++ft_fw_write(void)
++{
++	const uint8_t *fw = ft.fw;
++	unsigned fwlen = ft.fw_len;
++	if (fwlen < 0x120) {
++		printf("SWEET FTS: no firmware in ADT\n");
++		return ENOENT;
++	}
++	unsigned code_len = (unsigned)fw[0x100] << 8 | fw[0x101];
++	unsigned code_n = (unsigned)fw[0x102] << 8 | fw[0x103];
++	unsigned size = code_len * 4;
++	if (code_len + code_n != 0xffff || size > fwlen || size > 128 * 1024) {
++		printf("SWEET FTS: bad fw app length %#x\n", size);
++		return EINVAL;
++	}
++	if (ft_enter_boot()) {
++		return EIO;
++	}
++	static uint8_t pkt[DMA_MAX];
++	for (unsigned off = 0; off < size; off += 32 * 1024 - 16) {
++		unsigned plen = size - off < 32 * 1024 - 16 ? size - off : 32 * 1024 - 16;
++		const uint8_t addr[4] = { 0xad, (uint8_t)(off >> 16), (uint8_t)(off >> 8), (uint8_t)off };
++		if (ft_write(addr, 4)) {
++			return EIO;
++		}
++		pkt[0] = 0xae;
++		for (unsigned i = 0; i < plen; i++) {
++			pkt[1 + i] = fw[off + i];
++		}
++		if (ft_write(pkt, 1 + plen)) {
++			return EIO;
++		}
++	}
++	/* ECC 0xCC addr24 len24, 2 + ecc_delay 5 ms, read 0xCD */
++	const uint8_t ecc_cmd[7] = { 0xcc, 0, 0, 0, (uint8_t)(size >> 16), (uint8_t)(size >> 8), (uint8_t)size };
++	uint8_t ev[2] = { 0 };
++	if (ft_write(ecc_cmd, 7)) {
++		return EIO;
++	}
++	ft_wait(7);
++	if (ft_read(0xcd, ev, 2)) {
++		return EIO;
++	}
++	uint16_t tp = (uint16_t)(ev[0] << 8 | ev[1]), host = ft_ecc(fw, size);
++	printf("SWEET FTS: fw ecc tp %#x host %#x\n", tp, host);
++	if (tp != host) {
++		return EIO;
++	}
++	const uint8_t start = 0x08;  /* fts_pram_start */
++	if (ft_write(&start, 1)) {
++		return EIO;
++	}
++	ft_wait(10);
++	return 0;
++}
++
++/* ---- touch reports -> HID ---- */
++
++static void
++ft_report(uint32_t mask, const int *x, const int *y)
++{
++	for (unsigned id = 0; id < TOUCH_MAX; id++) {
++		uint32_t bit = 1u << id;
++		if (mask & bit) {
++			if (!(ft.active & bit) || x[id] != ft.x[id] || y[id] != ft.y[id]) {
++				sweet_hid_touch((int)id, 1, x[id], y[id]);
++			}
++			ft.x[id] = x[id], ft.y[id] = y[id];
++		} else if (ft.active & bit) {
++			sweet_hid_touch((int)id, 0, ft.x[id], ft.y[id]);
++		}
++	}
++	ft.active = mask;
++}
++
++/* read register 0x01: [1] low nibble = finger count, point i at buf+2+6*i */
++static int
++ft_poll(void)
++{
++	uint8_t b[62];
++	if (ft_read(0x01, b, sizeof(b))) {
++		return EIO;
++	}
++	if (b[1] == 0xff && b[2] == 0xff && b[3] == 0xff) {
++		return 0;  /* firmware idle / no frame */
++	}
++	unsigned fingers = b[1] & 0x0f;
++	if (fingers > TOUCH_MAX) {
++		return EIO;
++	}
++	int x[TOUCH_MAX] = { 0 }, y[TOUCH_MAX] = { 0 };
++	uint32_t mask = 0, seen = 0;
++	for (unsigned i = 0; i < TOUCH_MAX; i++) {
++		const uint8_t *p = b + 2 + 6 * i;
++		unsigned id = p[2] >> 4, event = p[0] >> 6;
++		if (id >= TOUCH_MAX) {
++			break;  /* vendor unused-record sentinel */
++		}
++		if (seen & (1u << id)) {
++			return EIO;
++		}
++		seen |= 1u << id;
++		if (event == 1u) {
++			continue;  /* lift */
++		}
++		if (event == 3u) {
++			return EIO;
++		}
++		unsigned px = ((unsigned)(p[0] & 0x0f) << 8) | p[1];
++		unsigned py = ((unsigned)(p[2] & 0x0f) << 8) | p[3];
++		if (px > 1079 || py > 2399) {
++			return EIO;
++		}
++		mask |= 1u << id;
++		x[id] = (int)px, y[id] = (int)py;
++	}
++	ft_report(mask, x, y);
++	return 0;
++}
++
++/* ---- clocks, pins, rails ---- */
++
++static bool
++ft_clocks(void)
++{
++	wr(ft.gcc, GCC_VOTE, rd(ft.gcc, GCC_VOTE) | 1u << 27 | 1u << 21 | 1u << 20);
++	for (int t = 0; t < 100000 && (rd(ft.gcc, GCC_SE13_CBCR) & (1u << 31)); t++) {
++		delay(1);
++	}
++	if (rd(ft.gcc, GCC_SE13_CBCR) & (1u << 31)) {
++		printf("SWEET FTS: SE13 clock off\n");
++		return false;
++	}
++	return true;
++}
++
++static void
++ft_pins_rails(void)
++{
++	/* reset low (output, 8 mA, pull-up), irq input pull-up */
++	wr(ft.tlmm, GPIO(PIN_RESET) + 4, 0);
++	wr(ft.tlmm, GPIO(PIN_RESET), (0u << 2) | ((8 / 2 - 1) << 6) | 3u | (1u << 9));
++	wr(ft.tlmm, GPIO(PIN_IRQ), (0u << 2) | ((8 / 2 - 1) << 6) | 3u);
++	ft_wait(1);
++}
++
++static void
++ft_thread(void *arg, wait_result_t result)
++{
++	unsigned delay_s = 30;
++	(void)arg, (void)result;
++	(void)PE_parse_boot_argn("sweettouchdelay", &delay_s, sizeof(delay_s));
++	printf("SWEET FTS: starting in %u s\n", delay_s);
++	ft_wait(delay_s * 1000u);
++
++	ft.gcc = ml_io_map(GCC_PA, GCC_SIZE);
++	ft.tlmm = ml_io_map(TLMM_PA, TLMM_SIZE);
++	ft.se = ml_io_map(SE_PA, SE_SIZE);
++	ft.gpi = ml_io_map(GPI_PA, GPI_SIZE);
++	ft.smmu = ml_io_map(SMMU_PA, SMMU_SIZE);
++	if (!ft.gcc || !ft.tlmm || !ft.se || !ft.gpi || !ft.smmu) {
++		printf("SWEET FTS: MMIO map failed\n");
++		goto out;
++	}
++	/*
++	 * One physically contiguous region for the SMMU table, GPI rings and SPI
++	 * data buffers, kept below 4 GiB: the GPI TRE / ring-base fields we fill
++	 * are 32-bit (upper dwords are zero). The identity map makes IOVA == PA.
++	 */
++	{
++		ppnum_t max_pnum = (ppnum_t)(atop_64(1ULL << 32) - 1);
++		if (kmem_alloc_contig(kernel_map, &ft.dma, DMA_REGION, PAGE_MASK, max_pnum,
++		    0, KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++			printf("SWEET FTS: no contiguous DMA memory\n");
++			goto out;
++		}
++		ppnum_t pn = pmap_find_phys(kernel_pmap, (addr64_t)ft.dma);
++		if (!pn) {
++			printf("SWEET FTS: DMA phys lookup failed\n");
++			goto out;
++		}
++		ft.dma_pa = ptoa_64(pn);
++	}
++
++	ft_pins_rails();
++	/* focaltech power-on: iovdd (ldoc8 1.8 V), 1 ms, vdd (ldoc3 3.3 V) */
++	if (sweet_rpmh_vreg_enable("ldoc8", 1800)) {
++		printf("SWEET FTS: ldoc8 vote failed\n");
++		goto out;
++	}
++	ft_wait(1);
++	if (sweet_rpmh_vreg_enable("ldoc3", 3300)) {
++		printf("SWEET FTS: ldoc3 vote failed\n");
++		goto out;
++	}
++	/* SPI pins 52-55: qup15 (func 1), 6 mA, no pull */
++	for (int p = 52; p <= 55; p++) {
++		wr(ft.tlmm, GPIO(p), (1u << 2) | ((6 / 2 - 1) << 6));
++	}
++	if (!ft_clocks() || smmu_setup() || gpi_setup()) {
++		goto out;
++	}
++	if (ft_fw_write()) {
++		printf("SWEET FTS: firmware download failed\n");
++		goto out;
++	}
++	ft_wait(200);
++	uint8_t cid = 0, ver = 0;
++	(void)ft_read(0xa3, &cid, 1);
++	(void)ft_read(0xa6, &ver, 1);
++	printf("SWEET FTS: app chip id %#x fw ver %#x; touch ready\n", cid, ver);
++
++	unsigned errors = 0;
++	while (!ft.dead) {
++		/* INT (gpio81) low = frame ready; also poll while contacts are down */
++		if (!(rd(ft.tlmm, GPIO(PIN_IRQ) + 4) & 1u) || ft.active) {
++			if (ft_poll()) {
++				if (++errors == 20) {
++					ft_report(0, ft.x, ft.y);
++				}
++			} else {
++				errors = 0;
++			}
++		}
++		ft_wait(8);
++	}
++	ft_report(0, ft.x, ft.y);
++out:
++	(void)thread_terminate(current_thread());
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++void
++sweet_fts_spi_start(void)
++{
++	DTEntry node;
++	const void *fw = NULL;
++	unsigned int size = 0;
++	thread_t thread;
++
++	if (SecureDTLookupEntry(NULL, "/sweet-fts-spi", &node) != kSuccess) {
++		return;
++	}
++	if (SecureDTGetProperty(node, "firmware", &fw, &size) == kSuccess) {
++		ft.fw = fw, ft.fw_len = size;
++	}
++	if (kernel_thread_start(ft_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	} else {
++		printf("SWEET FTS: kernel_thread_start failed\n");
++	}
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/bsd/dev/sweet_rpmh.c b/bsd/dev/sweet_rpmh.c
+index 0b7399a51bf0..eeeeec5d978e 100644
+--- a/bsd/dev/sweet_rpmh.c
++++ b/bsd/dev/sweet_rpmh.c
+@@ -346,8 +346,10 @@ sweet_rpmh_vreg_enable(const char *res, unsigned mv)
+ 	 * sweet: touch L11C. Spacewar: UFS VCC L7B, live DT vcc-voltage-level 2504000..2952000.
+ 	 */
+ 	if (!res || !((!strcmp(res, "ldoc11") && mv >= 2950 && mv <= 3400) ||
+-	    (!strcmp(res, "ldob7") && mv >= 2504 && mv <= 2952))) {
+-		printf("SWEET RPMH: expected ldoc11 2950..3400 mV or ldob7 2504..2952 mV\n");
++	    (!strcmp(res, "ldob7") && mv >= 2504 && mv <= 2952) ||
++	    (!strcmp(res, "ldoc8") && mv >= 1700 && mv <= 1900) ||
++	    (!strcmp(res, "ldoc3") && mv >= 3000 && mv <= 3400))) {
++		printf("SWEET RPMH: unexpected resource/voltage %s %u mV\n", res ? res : "(null)", mv);
+ 		return EINVAL;
+ 	}
+ 	if (__atomic_exchange_n(&rh_lock, 1, __ATOMIC_ACQUIRE)) {
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 03defe6a77a1..f2a25f75ba44 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -14,12 +14,14 @@
+ #include <kern/sched_prim.h>
+ #include <machine/machine_routines.h>
+ #include <pexpert/pexpert.h>
++#include <pexpert/device_tree.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ /* Mach MIG declaration is not included by BSD's exported thread.h. */
+ extern kern_return_t thread_terminate(thread_t);
+ extern int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
+ extern void sweet_hid_touch(int finger, int down, int x, int y);
++extern void sweet_fts_spi_start(void);
+ void sweet_touch_init(void);
+ 
+ #define TOUCH_SE_PA      0x00a84000u
+@@ -650,6 +652,16 @@ sweet_touch_init(void)
+ 		printf("SWEET TOUCH: disabled (sweettouch=0)\n");
+ 		return;
+ 	}
++	/* Spacewar: Focaltech FT3680 on SE13 SPI via GPI DMA (ADT /sweet-fts-spi).
++	 * sweet has no such node and keeps the Goodix/I2C path below. */
++	{
++		DTEntry fts;
++		if (SecureDTLookupEntry(NULL, "/sweet-fts-spi", &fts) == kSuccess) {
++			printf("SWEET TOUCH: Spacewar FT3680 SPI path\n");
++			sweet_fts_spi_start();
++			return;
++		}
++	}
+ 	kern_return_t kr = kernel_thread_start(touch_thread, NULL, &thread);
+ 	if (kr == KERN_SUCCESS) {
+ 		thread_deallocate(thread);

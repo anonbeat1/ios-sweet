@@ -2,7 +2,7 @@
 """Build the minimal Apple Device Tree that the SWEET xnu needs to boot.
 
 Only what the early boot path actually reads (see NOTES.md); every MMIO
-address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem] [--spacewar]
+address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem] [--spacewar] [--ft-fw FILE.i]
 --spacewar: Nothing Phone (1) (SM7325): RAM, framebuffer and vtimer from its live FDT and probes 1-7.
 """
 import hashlib, os, struct, sys
@@ -75,6 +75,14 @@ def d22ap_product(path=D22AP_ADT):
             return [(k, v) for k, f, v in c.props if not f and k not in ('name', 'AAPL,phandle')]
     raise SystemExit(f'{path}: no /product node')
 
+def ft_firmware(path):
+    """Focaltech app .i (a C initializer list of 0xNN bytes) -> bytes.
+    Kept out of git; byte-identical to the blob in the phone's fts_tp.ko."""
+    import re
+    data = open(path).read()
+    return bytes(int(x, 16) for x in re.findall(r'0x([0-9a-fA-F]{1,2})\b', data))
+
+
 u32 = lambda *v: struct.pack('<%dI' % len(v), *v)
 u64 = lambda *v: struct.pack('<%dQ' % len(v), *v)
 cstr = lambda s: s.encode() + b'\0'
@@ -87,7 +95,7 @@ def node(name, props=(), children=()):
     return n
 
 
-def build(seed=None, qemu=False, highmem=False, spacewar=False):
+def build(seed=None, qemu=False, highmem=False, spacewar=False, ft_fw=None):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
     phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
     fb, vtimer = FB, VTIMER_INTID
@@ -220,6 +228,14 @@ def build(seed=None, qemu=False, highmem=False, spacewar=False):
             node('sweet-keys', [ph()] + [(k.replace('_', '-'), u32(v)) for k, v in SPACEWAR_KEYS.items()]),
             node('sweet-rtc', [ph(), ('base', u32(SPACEWAR_RTC_BASE)),
                                ('offset-ms', u64(SPACEWAR_RTC_OFFSET_MS))])] if spacewar else []
+    # bsd/dev/sweet_fts_spi.c: Focaltech FT3680 on SE13 SPI via GPI DMA. The
+    # firmware blob (downloaded to PRAM every boot) rides in this node when
+    # --ft-fw is given; absent, the driver reports the boot id only.
+    if spacewar:
+        fts_props = [ph()]
+        if ft_fw:
+            fts_props.append(('firmware', ft_fw))
+        rpmh.append(node('sweet-fts-spi', fts_props))
 
     # pmap_compute_max_asids requires the node even when no overrides are set.
     # An absent pmap-max-asids property selects XNU's own MAX_ASIDS default.
@@ -255,7 +271,12 @@ def build(seed=None, qemu=False, highmem=False, spacewar=False):
 
 
 if __name__ == '__main__':
-    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv, spacewar='--spacewar' in sys.argv)
+    ft_fw = None
+    if '--ft-fw' in sys.argv:
+        ft_fw = ft_firmware(sys.argv[sys.argv.index('--ft-fw') + 1])
+        print(f'FT3680 firmware: {len(ft_fw)} bytes', file=sys.stderr)
+    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv,
+                 spacewar='--spacewar' in sys.argv, ft_fw=ft_fw)
     blob = adt.serialize(root)
     open(sys.argv[1], 'wb').write(blob)
     if '--dump' in sys.argv:
