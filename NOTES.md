@@ -377,6 +377,12 @@ Separate effort from sweet; sweet handoff below is unchanged.
     snps-femto, no QUSB2 block to probe). sweet has no /sweet-usb node -> byte-identical behaviour. mkadt --spacewar adds the
     node. Boot with sweetusb=2 to start the CDC-ECM gadget; host side needs the macOS equivalent of tools/sweet-usbnet.sh
     (CDC-ECM iface, 192.168.7.1/24, UDP log on :5140). DWC3 bring-up will likely need hardware iteration like the touch did.
+    0091 CI 39306972699 success (first build failed: sweet_smmu.c used delay() without <kern/clock.h>) -> `xnu/out-0091`.
+    Image `shim/out/spacewar-xnu-0091-usb.img` (ADT sweet-0091sw = 0090 nodes + /sweet-usb; cmdline sweetusb=2 sweettouch=0
+    sweetfb_noconsole=1). Host: `tools/sweet-usbnet-macos.sh` (CDC-ECM iface -> 192.168.7.1/24, Python UDP log listener on
+    :5140). NOT booted yet: expect "SWEET SMMU: context bank N", "SWEET SMMU: sid 0xe0 -> ... translate", "SWEET USB: running",
+    then the Mac enumerating a USB Ethernet interface and `ping 192.168.7.2`. Risk: DWC3 clocks/PHY on yupik unverified; a
+    stuck soft-reset or DMA fault would show in the first boot.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
