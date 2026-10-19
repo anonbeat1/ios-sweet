@@ -73,3 +73,166 @@ void test_touch(void)
 	con_hex2("SE13", "spi_cfg=", rd(SE13 + 0x22c), "word=", rd(SE13 + 0x24c));
 	con_hex2("SE13", "irq_en=", rd(SE13 + 0x614), "m_cmd0=", rd(SE13 + 0x600));
 }
+
+/* ---- bring-up: rails, pins, GENI SPI FIFO, FT3680 boot id ---- */
+
+#include "rpmh.h"
+
+#define SE(o)		(SE13 + (o))
+#define CTL_PULL_UP	3u
+#define CTL_FUNC(f)	((uint32_t)(f) << 2)
+#define CTL_DRV_MA(m)	((uint32_t)((m) / 2 - 1) << 6)
+#define CTL_OE		(1u << 9)
+#define IO_OUT		(1u << 1)
+
+static void udelay(unsigned us)
+{
+	uint64_t t, f, now;
+	__asm__ volatile("isb; mrs %0, cntpct_el0; mrs %1, cntfrq_el0" : "=r"(t), "=r"(f));
+	do
+		__asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(now));
+	while (now < t + f / 1000000 * us);
+}
+
+static void ts_reset(int high)
+{
+	wr(TLMM_GPIO(105) + 4, high ? IO_OUT : 0);
+}
+
+static unsigned tx_depth;
+
+static uint32_t m_cmd(uint32_t op, uint32_t params)
+{
+	wr(SE(0x618), 0xffffffffu);			/* M_IRQ_CLEAR */
+	wr(SE(0x600), op << 27 | params);		/* M_CMD0 */
+	return 0;
+}
+
+static int m_done(void)
+{
+	for (unsigned i = 0; i < 100000; i++) {
+		if (rd(SE(0x610)) & 1u)			/* M_CMD_DONE */
+			return 0;
+		udelay(1);
+	}
+	return -1;
+}
+
+/* One CS-framed full-duplex transfer, polled FIFO (spi-geni-qcom.c sequence). */
+static int spi_xfer(const uint8_t *tx, uint8_t *rx, unsigned n)
+{
+	m_cmd(8, 0);					/* SPI_CS_ASSERT */
+	if (m_done())
+		return -1;
+	wr(SE(0x25c), rd(SE(0x25c)) & ~1u);		/* TRANS_CFG: no CS toggle */
+	wr(SE(0x26c), n);				/* TX_TRANS_LEN (8-bit words) */
+	wr(SE(0x270), n);				/* RX_TRANS_LEN */
+	m_cmd(3, 1u << 2);				/* SPI_FULL_DUPLEX, FRAGMENTATION */
+	unsigned ti = 0, ri = 0;
+	for (unsigned spin = 0; ri < n && spin < 100000; spin++) {
+		while (ti < n && (rd(SE(0x800)) & 0x0fffffffu) < tx_depth) {
+			uint32_t w = 0;
+			for (unsigned j = 0; j < 4 && ti < n; j++)
+				w |= (uint32_t)tx[ti++] << (8 * j);
+			wr(SE(0x700), w);
+		}
+		for (uint32_t wc = rd(SE(0x804)) & 0x1ffffffu; wc && ri < n; wc--) {
+			uint32_t w = rd(SE(0x780));
+			for (unsigned j = 0; j < 4 && ri < n; j++)
+				rx[ri++] = (uint8_t)(w >> (8 * j));
+		}
+		if (ri < n)
+			udelay(1);
+	}
+	int rc = m_done() || ri < n ? -2 : 0;
+	m_cmd(9, 0);					/* SPI_CS_DEASSERT */
+	if (m_done())
+		rc = -3;
+	udelay(150);					/* focaltech CS_HIGH_DELAY */
+	return rc;
+}
+
+static uint16_t crc16_kermit(const uint8_t *d, unsigned len)
+{
+	uint16_t crc = 0xffff;
+	for (unsigned i = 0; i < len; i++) {
+		crc ^= d[i];
+		for (int j = 0; j < 8; j++)
+			crc = (crc & 1) ? (crc >> 1) ^ 0x8408 : crc >> 1;
+	}
+	return crc;
+}
+
+void touch_bringup(void)
+{
+	con_str("TOUCH", "bring-up: rails, pins, SPI, FT3680 boot id");
+	/* reset low (output), irq input pull-up: DT pmx_ts_active (8 mA, pull-up) */
+	ts_reset(0);
+	wr(TLMM_GPIO(105), CTL_FUNC(0) | CTL_DRV_MA(8) | CTL_PULL_UP | CTL_OE);
+	wr(TLMM_GPIO(81), CTL_FUNC(0) | CTL_DRV_MA(8) | CTL_PULL_UP);
+	udelay(1000);
+	/* focaltech_core.c power-on: iovdd, 1 ms, vdd */
+	if (rpmh_vreg_enable("ldoc8", 1800) || (udelay(1000), rpmh_vreg_enable("ldoc3", 3300))) {
+		con_str("TOUCH", "rail vote failed: stop");
+		return;
+	}
+	/* SPI pins: qup15, 6 mA, no pull (DT qupv3_se13_spi_active) */
+	for (int p = 52; p <= 55; p++)
+		wr(TLMM_GPIO(p), CTL_FUNC(1) | CTL_DRV_MA(6));
+	wr(GCC + GCC_VOTE, rd(GCC + GCC_VOTE) | 1U << 27 | 1U << 21 | 1U << 20);
+	for (int t = 0; t < 100000 && (rd(GCC + 0x185fc) & (1U << 31)); t++)
+		;
+	if (rd(GCC + 0x185fc) & (1U << 31)) {
+		con_str("TOUCH", "SE13 clock still off: stop");
+		return;
+	}
+	/* GENI init + FIFO mode (qcom-geni-se.c geni_se_init/select_fifo_mode) */
+	uint32_t hw0 = rd(SE(0xe24));
+	tx_depth = (hw0 >> 16) & 0x3f;
+	wr(SE(0xe18), 0);				/* GSI_EVENT_EN */
+	wr(SE(0x618), 0xffffffffu);			/* M_IRQ_CLEAR */
+	wr(SE(0x648), 0xffffffffu);			/* S_IRQ_CLEAR */
+	wr(SE(0x28), rd(SE(0x28)) | 0x7f);		/* CGC_CTRL default */
+	wr(SE(0xe30), rd(SE(0xe30)) | 0xf);		/* DMA_GENERAL_CFG clock gating on */
+	wr(SE(0x24), 0x7f);				/* OUTPUT_CTRL */
+	wr(SE(0x20), 1);				/* FORCE_DEFAULT */
+	wr(SE(0xe1c), rd(SE(0xe1c)) | 0xf);		/* SE_IRQ_EN */
+	wr(SE(0x258), rd(SE(0x258)) & ~1u);		/* FIFO mode */
+	wr(SE(0x810), 0);				/* RX watermark */
+	wr(SE(0x814), tx_depth - 2);			/* RX RFR watermark */
+	wr(SE(0x614), rd(SE(0x614)) | 1u | 1u << 26 | 1u << 27 | 1u << 30);
+	/* 8-bit words, 4 per FIFO word, MSB first (geni_se_config_packing) */
+	wr(SE(0x260), 0x0007f8fe), wr(SE(0x264), 0x000ffefe);
+	wr(SE(0x284), 0x0007f8fe), wr(SE(0x288), 0x000ffefe);
+	wr(SE(0x254), 0);				/* BYTE_GRAN */
+	wr(SE(0x268), (rd(SE(0x268)) & ~0x3ffu) | (8 - 4));	/* WORD_LEN */
+	/* mode 0, CS0, 19.2 MHz / 4 = 4.8 MHz (<= DT 6 MHz) */
+	wr(SE(0x22c), 0), wr(SE(0x250), 0), wr(SE(0x224), 0), wr(SE(0x230), 0), wr(SE(0x24c), 0);
+	wr(SE(0x7c), 0);
+	wr(SE(0x48), 4u << 4 | 1u);
+	con_hex2("SE13", "hw0=", hw0, "depth=", tx_depth);
+
+	/* focaltech_flash.c fts_enter_into_boot: reset, 0x55, read boot id 0x90 */
+	for (int i = 0; i < 3; i++) {
+		ts_reset(0);
+		udelay(1000);
+		ts_reset(1);
+		udelay((8 + i) * 1000);
+		static const uint8_t start1[4] = { 0x55, 0x00, 0x00, 0x00 };
+		uint8_t rx[16] = { 0 };
+		int rc = spi_xfer(start1, rx, sizeof(start1));
+		udelay(8000);
+		static const uint8_t rid[11] = { 0x90, 0xa0, 0x00, 0x02 };
+		uint8_t id[11] = { 0 };
+		int rc2 = spi_xfer(rid, id, sizeof(rid));
+		uint16_t crc = crc16_kermit(&id[7], 2), got = (uint16_t)(id[10] << 8 | id[9]);
+		con_hex2("FT 0x55", "rc=", (uint32_t)rc, "st=", rx[3]);
+		con_hex2("FT 0x90", "rc=", (uint32_t)rc2, "st=", id[3]);
+		con_hex2("FT ID", "id=", id[7] << 8 | id[8], "crc ok=", crc == got);
+		if (rc2 == 0 && crc == got && id[7] == 0x56 && id[8] == 0x62) {
+			con_str("FT3680", "boot id 0x5662: SPI link works");
+			return;
+		}
+	}
+	con_str("FT3680", "no valid boot id");
+}

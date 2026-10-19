@@ -400,7 +400,8 @@ void shim_main(uint64_t dtb)
 	con_str("LOADER", loader_boot(dtb));	/* returns only without a payload */
 	con_skip();
 	stage = "touch";
-	test_touch();	/* read-only; MMU off, right after ABL */
+	test_touch();	/* state ABL left (votes the SE13 clocks) */
+	touch_bringup();	/* rails, pins, GENI SPI, FT3680 boot id */
 	con_str("TOUCH", "probe done, pages in 3 min");
 	delay_ms(180000);
 
