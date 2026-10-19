@@ -172,7 +172,10 @@ Separate effort from sweet; sweet handoff below is unchanged.
     with pull-down (ctl 0x1, io 0). Voting bits 27/21/20 turns SE13 on; then **SE13 FW_REVISION_RO = 0x0102 (protocol 1 = SPI
     firmware already loaded by boot)**, GENI status 0, m_clk_cfg 0x11, irq_en 0x33C0007E. No bus hang.
   - **Handoff 2026-10-19 18:35**: 0088 CI 39282672505 success -> `xnu/out-0088`, image `shim/out/spacewar-xnu-0088-keys.img`
-    (cpus=8, console on, keys on) booted ~18:3x; keys/RTC result NOT yet reported by the user.
+    (cpus=8, console on, keys on) booted 18:32: **user confirmed keys work (power lock/wake, volume) and the date is right**;
+    lock screen showed 9:36 at ~16:36 UTC = America/Los_Angeles (iOS default zone, none set in the image): kernel UTC is
+    correct, the root image needs a time zone (TODO in the next image build; how iOS 16 stores it is not verified yet).
+    Daily image: `shim/out/spacewar-xnu-0088-fast.img` (cpus=8, sweetfb_noconsole=1, keys on, touch/usb off).
     Touch shim bring-up (`shim/touchprobe.c` touch_bringup, `shim/rpmh.c`): ldoc8 1800 mV and ldoc3 3300 mV votes OK
     (cmd-db addr 0x42500 / 0x40E00); SE13 hw0 0x20102864 (FIFO 16 x 32 bit). FIFO transfers stall: run 1 (CS_ASSERT,
     FULL_DUPLEX+FRAGMENTATION, CS_DEASSERT) hung in DEASSERT; run 2 (single FULL_DUPLEX, engine CS) hung at once (M_IRQ 0,
