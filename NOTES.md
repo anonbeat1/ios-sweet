@@ -418,6 +418,20 @@ Separate effort from sweet; sweet handoff below is unchanged.
     (SWEET KEYS/HID), "SWEET USB: ue0 rx 276 tx 74 frames", and the known bluetoothd/fairplayd relaunch loop. The log
     window starts mid-run, so the "SWEET SMMU: sid 0xe0 already matched by smr N" line was not captured yet (needs a photo
     or the persistent log). Daily image candidate: 0091 kernel with sweetusb=2 + touch on + sweetfb_noconsole=1.
+    Daily image built: `shim/out/spacewar-xnu-0091-daily.img` (0091 kernel, ADT sweet-0091sw, cpus=8, sweetusb=2, touch on,
+    sweetfb_noconsole=1, sweetfb_hz=30, no -enable_kprintf_spam).
+  - **xnu 0092 (`0092-sweet-configd-network-interface.patch`, applies on 0091; NOT built/booted)**: make iOS configd adopt ue0.
+    configd-1241.140.6 (source fetched to the session scratchpad) builds interfaces from IOKit, not BSD ifnets:
+    SCNetworkInterface.c createInterface() needs an object conforming to "IONetworkInterface" (IOInterfaceType 6, IOBuiltin,
+    "BSD Name", IOInterfaceNamePrefix, IOInterfaceUnit) under a controller (IOMACAddress, "SelfNamed") under a bus.
+    InterfaceNamer only processes interfaces after IOServiceOpen("IONetworkStack") succeeds (updateInterfaces returns
+    without S_connect); SelfNamed makes it skip naming. Built-in + "HiddenConfiguration" = Apple pre-configured
+    (_SCNetworkInterfaceIsApplePreconfigured) -> PreferencesMonitor updatePreConfiguredConfiguration() creates the service
+    itself with "NetworkConfigurationOverrides" as template (SCNetworkService.c merges per protocol type). New
+    `iokit/Kernel/arm/SweetNetwork.cpp`: IONetworkInterface/IOEthernetInterface/IONetworkStack (+ no-op user client)
+    stand-ins, SweetEthernetController, SweetNetworkBus; sweet_net_publish() called by sweet_usb.c after ud_if_create
+    (boot-arg sweetnetcfg=0 skips) with IPv4 Manual 192.168.7.2/24 router 192.168.7.1, DNS 1.1.1.1 8.8.8.8. Applies to
+    sweet too (same goal there). Host side for internet: Mac NAT (IP forwarding + pf nat) for 192.168.7.0/24 - to do.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON

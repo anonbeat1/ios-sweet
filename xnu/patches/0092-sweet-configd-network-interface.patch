@@ -1,0 +1,262 @@
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index 9c3ea52ac0d0..81ca117a489b 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -43,6 +43,9 @@ void sweet_usb_probe(void);
+ static void sweet_usb_gadget_start(vm_offset_t dwc);
+ extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
+ extern int sweet_smmu_map_sid(unsigned sid);
++extern void sweet_net_publish(const char *bsd_name, const char *prefix, unsigned unit,
++    const uint8_t *mac, const char *ip, const char *mask, const char *router,
++    const char *dns1, const char *dns2);
+ 
+ #define GCC_PA                  0x00100000
+ #define GCC_SIZE                0x001f0000      /* yupik GCC is 0x1f0000; Spacewar GDSC is at 0x10f004 */
+@@ -931,6 +934,17 @@ sweet_usb_gadget_start(vm_offset_t dwc)
+ 	ud.dma_pa = ptoa_64(pn);
+ 	printf("SWEET USB: DMA at 0x%llx, creating ue0\n", ud.dma_pa);
+ 	ud_if_create();
++	/*
++	 * Make configd adopt ue0 (IOKit stand-ins in SweetNetwork.cpp): a built-in,
++	 * pre-configured Ethernet service with the same static address the kernel
++	 * set, default route via the host and public DNS. sweetnetcfg=0 skips it.
++	 */
++	int netcfg = 1;
++	PE_parse_boot_argn("sweetnetcfg", &netcfg, sizeof(netcfg));
++	if (netcfg && ud.ifp != NULL) {
++		sweet_net_publish("ue0", "ue", 0, ud_phone_mac, "192.168.7.2", "255.255.255.0",
++		    "192.168.7.1", "1.1.1.1", "8.8.8.8");
++	}
+ 	printf("SWEET USB: ue0 created; GCTL 0x%08x DCTL 0x%08x DSTS 0x%08x before reset\n",
+ 	    dwc_rd(GCTL), dwc_rd(DCTL), dwc_rd(DSTS));
+ 
+diff --git a/iokit/Kernel/arm/SweetNetwork.cpp b/iokit/Kernel/arm/SweetNetwork.cpp
+new file mode 100644
+index 000000000000..55ddb81f0282
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetNetwork.cpp
+@@ -0,0 +1,212 @@
++/*
++ * SWEET: IOKit stand-ins so iOS configd adopts the kernel's USB Ethernet
++ * ifnet (bsd/dev/sweet_usb.c) as a network service.
++ *
++ * configd (configd-1241.140.6) builds its interface list from IOKit, not
++ * from BSD ifnets: SCNetworkInterface.c createInterface() walks an object
++ * that conforms to "IONetworkInterface" (IOInterfaceType, IOBuiltin, BSD
++ * Name, IOInterfaceNamePrefix, IOInterfaceUnit), its parent controller
++ * (IOMACAddress, SelfNamed) and the controller's parent (bus). Apple's
++ * IONetworkingFamily kext is not part of this kernel, so these classes
++ * carry the same names with only those properties.
++ *
++ * InterfaceNamer only processes interfaces once it can open the
++ * "IONetworkStack" service; the controller is SelfNamed, so the stack never
++ * receives naming commands and its user client does nothing.
++ *
++ * An interface that is built-in and has HiddenConfiguration counts as
++ * "Apple pre-configured" (_SCNetworkInterfaceIsApplePreconfigured):
++ * PreferencesMonitor creates its network service itself, with the
++ * template overrides from "NetworkConfigurationOverrides" (IPv4 manual
++ * address/router, DNS servers). No preferences.plist edit is needed.
++ */
++#include <IOKit/IOService.h>
++#include <IOKit/IOUserClient.h>
++#include <IOKit/IOKitKeys.h>
++#include <IOKit/IOLib.h>
++#include <libkern/c++/OSArray.h>
++#include <libkern/c++/OSData.h>
++#include <libkern/c++/OSDictionary.h>
++#include <libkern/c++/OSString.h>
++
++class IONetworkInterface : public IOService {
++	OSDeclareDefaultStructors(IONetworkInterface);
++};
++OSDefineMetaClassAndStructors(IONetworkInterface, IOService);
++
++class IOEthernetInterface : public IONetworkInterface {
++	OSDeclareDefaultStructors(IOEthernetInterface);
++};
++OSDefineMetaClassAndStructors(IOEthernetInterface, IONetworkInterface);
++
++class SweetEthernetController : public IOService {
++	OSDeclareDefaultStructors(SweetEthernetController);
++};
++OSDefineMetaClassAndStructors(SweetEthernetController, IOService);
++
++class SweetNetworkBus : public IOService {
++	OSDeclareDefaultStructors(SweetNetworkBus);
++};
++OSDefineMetaClassAndStructors(SweetNetworkBus, IOService);
++
++class IONetworkStack : public IOService {
++	OSDeclareDefaultStructors(IONetworkStack);
++};
++OSDefineMetaClassAndStructors(IONetworkStack, IOService);
++
++class SweetNetworkStackUserClient : public IOUserClient {
++	OSDeclareDefaultStructors(SweetNetworkStackUserClient);
++public:
++	IOReturn clientClose(void) APPLE_KEXT_OVERRIDE;
++};
++OSDefineMetaClassAndStructors(SweetNetworkStackUserClient, IOUserClient);
++
++IOReturn
++SweetNetworkStackUserClient::clientClose(void)
++{
++	terminate();
++	return kIOReturnSuccess;
++}
++
++static OSArray *
++sweet_net_strings(const char *a, const char *b)
++{
++	OSArray *arr = OSArray::withCapacity(2);
++	if (arr == NULL) {
++		return NULL;
++	}
++	const char *v[2] = { a, b };
++	for (unsigned i = 0; i < 2; i++) {
++		if (v[i] == NULL) {
++			continue;
++		}
++		OSString *s = OSString::withCString(v[i]);
++		if (s != NULL) {
++			arr->setObject(s);
++			s->release();
++		}
++	}
++	return arr;
++}
++
++/* Attach obj under provider and publish it; drops the caller's reference. */
++static bool
++sweet_net_attach(IOService *obj, IOService *provider)
++{
++	bool ok = obj->attach(provider);
++	if (ok) {
++		obj->registerService();
++	}
++	obj->release();
++	return ok;
++}
++
++static void
++sweet_net_set_overrides(IOService *intf, const char *ip, const char *mask,
++    const char *router, const char *dns1, const char *dns2)
++{
++	OSDictionary *ov = OSDictionary::withCapacity(2);
++	OSDictionary *v4 = OSDictionary::withCapacity(4);
++	OSDictionary *dns = OSDictionary::withCapacity(1);
++	OSArray *addrs = sweet_net_strings(ip, NULL);
++	OSArray *masks = sweet_net_strings(mask, NULL);
++	OSArray *servers = sweet_net_strings(dns1, dns2);
++	OSString *method = OSString::withCString("Manual");
++	OSString *gw = OSString::withCString(router);
++
++	if (ov && v4 && dns && addrs && masks && servers && method && gw) {
++		v4->setObject("ConfigMethod", method);
++		v4->setObject("Addresses", addrs);
++		v4->setObject("SubnetMasks", masks);
++		v4->setObject("Router", gw);
++		dns->setObject("ServerAddresses", servers);
++		ov->setObject("IPv4", v4);
++		ov->setObject("DNS", dns);
++		intf->setProperty("NetworkConfigurationOverrides", ov);
++	}
++	OSSafeReleaseNULL(ov);
++	OSSafeReleaseNULL(v4);
++	OSSafeReleaseNULL(dns);
++	OSSafeReleaseNULL(addrs);
++	OSSafeReleaseNULL(masks);
++	OSSafeReleaseNULL(servers);
++	OSSafeReleaseNULL(method);
++	OSSafeReleaseNULL(gw);
++}
++
++/*
++ * Publish bus -> controller -> interface for one BSD ifnet, plus the
++ * IONetworkStack (once). Called by sweet_usb.c after creating its ifnet.
++ */
++extern "C" void
++sweet_net_publish(const char *bsd_name, const char *prefix, unsigned unit,
++    const uint8_t *mac, const char *ip, const char *mask, const char *router,
++    const char *dns1, const char *dns2)
++{
++	static bool stack_published;
++	IOService *platform = IOService::getPlatform();
++
++	if (platform == NULL) {
++		IOLog("SWEET NET: no platform expert; IOKit interface not published\n");
++		return;
++	}
++
++	if (!stack_published) {
++		IONetworkStack *stack = OSTypeAlloc(IONetworkStack);
++		if (stack != NULL && stack->init()) {
++			stack->setProperty(kIOUserClientClassKey, "SweetNetworkStackUserClient");
++			stack_published = sweet_net_attach(stack, platform);
++		} else {
++			OSSafeReleaseNULL(stack);
++		}
++	}
++
++	SweetNetworkBus *bus = OSTypeAlloc(SweetNetworkBus);
++	if (bus == NULL || !bus->init()) {
++		OSSafeReleaseNULL(bus);
++		return;
++	}
++	bus->setName("sweet-usb");
++	bus->retain();          /* keep it until the controller is attached */
++	if (!sweet_net_attach(bus, platform)) {
++		bus->release();
++		return;
++	}
++
++	SweetEthernetController *ctrl = OSTypeAlloc(SweetEthernetController);
++	if (ctrl == NULL || !ctrl->init()) {
++		OSSafeReleaseNULL(ctrl);
++		bus->release();
++		return;
++	}
++	ctrl->setProperty("IOMACAddress", (void *)mac, 6);
++	ctrl->setProperty("SelfNamed", kOSBooleanTrue);
++	ctrl->retain();
++	bool ctrl_ok = sweet_net_attach(ctrl, bus);
++	bus->release();
++	if (!ctrl_ok) {
++		ctrl->release();
++		return;
++	}
++
++	IOEthernetInterface *intf = OSTypeAlloc(IOEthernetInterface);
++	if (intf == NULL || !intf->init()) {
++		OSSafeReleaseNULL(intf);
++		ctrl->release();
++		return;
++	}
++	intf->setProperty("IOInterfaceType", 6ULL, 32);         /* IFT_ETHER */
++	intf->setProperty("IOBuiltin", kOSBooleanTrue);
++	intf->setProperty("IOPrimaryInterface", kOSBooleanFalse);
++	intf->setProperty("BSD Name", bsd_name);
++	intf->setProperty("IOInterfaceNamePrefix", prefix);
++	intf->setProperty("IOInterfaceUnit", (unsigned long long)unit, 32);
++	intf->setProperty("HiddenConfiguration", kOSBooleanTrue);
++	sweet_net_set_overrides(intf, ip, mask, router, dns1, dns2);
++	bool intf_ok = sweet_net_attach(intf, ctrl);
++	ctrl->release();
++
++	IOLog("SWEET NET: IOKit interface %s %s (built-in, pre-configured %s via %s, stack %s)\n",
++	    bsd_name, intf_ok ? "published" : "NOT published", ip, router,
++	    stack_published ? "up" : "missing");
++}
+diff --git a/iokit/conf/files.arm64 b/iokit/conf/files.arm64
+index acc9ae026481..65de10191dd2 100644
+--- a/iokit/conf/files.arm64
++++ b/iokit/conf/files.arm64
+@@ -15,6 +15,7 @@ iokit/Kernel/arm/SweetKeyStore.cpp                               optional iokitc
+ iokit/Kernel/arm/SweetWatchdog.cpp                               optional iokitcpp
+ iokit/Kernel/arm/SweetSurface.cpp                                optional iokitcpp
+ iokit/Kernel/arm/SweetFramebuffer.cpp                            optional iokitcpp
++iokit/Kernel/arm/SweetNetwork.cpp                                optional iokitcpp
+ iokit/Kernel/arm/SweetBattery.cpp                                optional iokitcpp
+ iokit/Kernel/arm/hid/SweetHID.cpp                                optional iokitcpp
+ iokit/Kernel/arm/hid/IOHIDEvent.cpp                              optional iokitcpp
