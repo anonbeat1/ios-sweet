@@ -20,7 +20,7 @@ os=$(realpath "$1") sysos=$(realpath "$2") appos=$(realpath "$3") out=$4 size=${
 work=$(mktemp -d)
 devs=()
 cleanup() {
-	for d in "${devs[@]}"; do
+	for d in ${devs[@]+"${devs[@]}"}; do
 		hdiutil detach -force "$d" >/dev/null 2>&1 || true
 	done
 	rmdir "$work"/* "$work" 2>/dev/null || true
@@ -33,7 +33,8 @@ mount_any() {
 	mkdir "$work/$2"
 	local cls=()
 	raw_apfs "$1" && cls=(-imagekey diskimage-class=CRawDiskImage)
-	devs+=("$(hdiutil attach -readonly -nobrowse -noverify -owners on "${cls[@]}" -mountpoint "$work/$2" "$1" | awk 'NR==1{print $1}')")
+	# bash 3.2 (macOS) + set -u: an empty array must be expanded this way
+	devs+=("$(hdiutil attach -readonly -nobrowse -noverify -owners on ${cls[@]+"${cls[@]}"} -mountpoint "$work/$2" "$1" | awk 'NR==1{print $1}')")
 	[[ -d $work/$2/System || -d $work/$2/usr ]] || { echo "$1: nothing mounted at $work/$2" >&2; exit 1; }
 }
 mount_any "$os" os
