@@ -408,6 +408,10 @@ Separate effort from sweet; sweet handoff below is unchanged.
     the first transfer, which the hypervisor turns into a reset (touch had no pre-existing SMR for 0x56/0x43).
     Fix: sweet_smmu_map_sid() now looks for an existing matching SMR (id under its mask); exact (mask 0) -> repoint its S2CR
     to our bank, no duplicate; masked -> log and return EEXIST (USB not started, no crash). Prints the existing smr/s2cr.
+    **MILESTONE (2026-10-19 ~22:30, CI 39317585026, `shim/out/spacewar-xnu-0091-usbdiag.img`): Spacewar USB gadget enumerates on
+    the Mac** as "Sweet iOS (USB Ethernet)", en7, peer MAC 02:00:5e:77:ee:01, status active (~200 s after fastboot boot):
+    the first DWC3 DMA no longer resets the SoC with the SMR-reuse fix (which SMR/s2cr line printed not yet seen: photo
+    pending). Host IP not yet set (the script needs sudo), so ping 192.168.7.2 untested.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
