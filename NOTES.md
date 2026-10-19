@@ -397,6 +397,17 @@ Separate effort from sweet; sweet handoff below is unchanged.
     0x8201c, ahb2phy 0x6a004, clkref 0x8c010) are sweet/sdmmagpie-specific and external-abort on yupik. Fixed in sweet_usb.c:
     on a no-QUSB2 board read only the first 3 cbcr entries (master/sleep/utmi, cross-SoC); clocks_on already uses the
     parameterised offsets. Needs a kernel rebuild (CI).
+    **4th-6th usb boots (21:38-22:05, console on, step prints)**: GDSC/clocks/DWC3 regs OK (DWC3 GSNPSID 0x5533330a = v3.30a),
+    "SWEET SMMU: context bank 7, identity map, ttbr0 0xe07fc000", "sid 0xe0 -> smr 8 s2cr 0x7 (translate)", DMA alloc, ue0
+    192.168.7.2/24 up, "soft reset done after 1 ms", "event buf + DCFG done", "endpoints ready; arming setup (first DMA)",
+    then **CrashDump on the first DWC3 DMA** (ud_start_setup: STARTTRANSFER of the ep0 setup TRB). CPUFREQ lines confirm
+    0090 on hardware: dom0 6->8 (1804 MHz), dom1 0->9 (2400), dom2 0->9 (2515).
+    Ruled out: >4 GiB truncation (TRB buffer and STARTTRANSFER pointers are written as full 64-bit).
+    Hypothesis (unverified): ABL uses this controller with DMA for fastboot, so a valid SMR for 0xe0 probably already exists
+    among SMRs 0-7 (first free was 8); our extra SMR 8 makes two entries match 0xe0 = stream-match conflict = global fault on
+    the first transfer, which the hypervisor turns into a reset (touch had no pre-existing SMR for 0x56/0x43).
+    Fix: sweet_smmu_map_sid() now looks for an existing matching SMR (id under its mask); exact (mask 0) -> repoint its S2CR
+    to our bank, no duplicate; masked -> log and return EEXIST (USB not started, no crash). Prints the existing smr/s2cr.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON

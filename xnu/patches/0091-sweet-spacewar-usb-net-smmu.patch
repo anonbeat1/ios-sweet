@@ -12,10 +12,10 @@ index d411e72b36e6..2b9fa4a30566 100644
  bsd/dev/sweet_usb.c			standard
 diff --git a/bsd/dev/sweet_smmu.c b/bsd/dev/sweet_smmu.c
 new file mode 100644
-index 000000000000..159863ef5940
+index 000000000000..c550ffe09a75
 --- /dev/null
 +++ b/bsd/dev/sweet_smmu.c
-@@ -0,0 +1,199 @@
+@@ -0,0 +1,226 @@
 +/*
 + * SWEET Spacewar apps_smmu: a translating stage-1 context bank that
 + * identity-maps DRAM, shared by the DMA masters the SWEET drivers drive.
@@ -182,8 +182,13 @@ index 000000000000..159863ef5940
 +		}
 +	}
 +
-+	/* already mapped? (valid SMR whose masked id equals sid, pointing at our cb) */
-+	int free_smr = -1;
++	/*
++	 * Look for a valid SMR that already matches sid (id compared under its
++	 * mask). A second matching SMR would be a stream-match conflict, a
++	 * global fault on the first transfer. Masters ABL itself uses (the USB
++	 * controller, for fastboot) can arrive with such an entry.
++	 */
++	int free_smr = -1, match = -1;
 +	for (unsigned i = 0; i < smmu_nsmr && i < 128; i++) {
 +		uint32_t smr = smmu_rd(0x800 + 4 * i);
 +		if (!(smr & (1u << 31))) {
@@ -192,11 +197,33 @@ index 000000000000..159863ef5940
 +			}
 +			continue;
 +		}
-+		if ((smr & 0x7fff) == (sid & 0x7fff) &&
-+		    (smmu_rd(0xc00 + 4 * i) & 0xff) == (uint32_t)smmu_cb) {
++		uint32_t mask = (smr >> 16) & 0x7fff;
++		if (((smr ^ sid) & ~mask & 0x7fff) == 0 && match < 0) {
++			match = (int)i;
++		}
++	}
++	if (match >= 0) {
++		uint32_t smr = smmu_rd(0x800 + 4 * (unsigned)match);
++		uint32_t s2cr = smmu_rd(0xc00 + 4 * (unsigned)match);
++		printf("SWEET SMMU: sid 0x%x already matched by smr %d (smr 0x%x s2cr 0x%x)\n",
++		    sid, match, smr, s2cr);
++		if ((s2cr & 0xff) == (uint32_t)smmu_cb && ((s2cr >> 16) & 3) == 0) {
 +			error = 0;      /* an earlier call mapped it */
 +			goto out;
 +		}
++		if ((smr >> 16) & 0x7fff) {
++			/* masked entry covers other streams too: do not repoint it */
++			printf("SWEET SMMU: smr %d is masked; leaving it alone\n", match);
++			error = EEXIST;
++			goto out;
++		}
++		/* exact entry: point its S2CR at our bank instead of adding a duplicate */
++		smmu_wr(0xc00 + 4 * (unsigned)match, (uint32_t)smmu_cb);
++		s2cr = smmu_rd(0xc00 + 4 * (unsigned)match);
++		printf("SWEET SMMU: sid 0x%x smr %d s2cr now 0x%x (%s)\n", sid, match, s2cr,
++		    (((s2cr >> 16) & 3) == 0 && (s2cr & 0xff) == (uint32_t)smmu_cb) ? "translate" : "REFUSED");
++		error = (((s2cr >> 16) & 3) == 0 && (s2cr & 0xff) == (uint32_t)smmu_cb) ? 0 : EIO;
++		goto out;
 +	}
 +	if (free_smr < 0) {
 +		printf("SWEET SMMU: no free SMR for sid 0x%x\n", sid);
