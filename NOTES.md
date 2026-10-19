@@ -112,6 +112,9 @@ Separate effort from sweet; sweet handoff below is unchanged.
     at "Booting" once (replug, retry). Kernel up to BSD, then "SWEET UFS: command 0x00 failed: ocs 0x0 upiu 0x21 response
     0x1 status 0x2" x3 -> panic "IOFindBSDRoot: SWEET UFS root ufsroot0 unavailable: 5". TEST UNIT READY gets CHECK
     CONDITION three times. xnu 0084: print autosense key/ASC/ASCQ and retry TUR up to 50 x 50 ms on UNIT ATTENTION/NOT READY.
+  - 0084 boot (16:27): TUR fails 50x with **sense 2/04/02 (NOT READY, initializing command required)** -> same panic. The UFS
+    device is not in Active power mode after ABL. xnu 0085: on 2/04/02 send START STOP UNIT (power condition ACTIVE,
+    cdb 1b 00 00 00 10 00) to the UFS Device W-LU (UPIU LUN 0xd0), like Linux ufshcd_set_dev_pwr_mode, then retry TUR.
   - Never press START in ABL's fastboot menu now: Android would find a non-f2fs userdata and may offer to format it.
   Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
   Partition backups to take: persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots.

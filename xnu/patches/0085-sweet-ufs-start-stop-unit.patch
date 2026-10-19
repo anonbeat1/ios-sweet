@@ -1,0 +1,31 @@
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index c44dc28..98eade5 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -636,8 +636,24 @@ sweet_ufs_init(void)
+ 		 * per command; Spacewar after a fastboot flash: more than three) or
+ 		 * NOT READY: retry those for up to ~2.5 s, give up on anything else.
+ 		 */
+-		for (int i = 0; i < 50 && (error = ufs_scsi(tur, sizeof(tur), 0, false)) &&
+-		    (su.sense_key == 0x6 || su.sense_key == 0x2); i++) {
++		/* START STOP UNIT, POWER CONDITION = ACTIVE (1), as Linux ufshcd_set_dev_pwr_mode. */
++		static const uint8_t ssu_active[6] = { 0x1b, 0, 0, 0, 0x10, 0 };
++		for (int i = 0; i < 50; i++) {
++			error = ufs_scsi(tur, sizeof(tur), 0, false);
++			if (!error || (su.sense_key != 0x6 && su.sense_key != 0x2)) {
++				break;
++			}
++			if (su.sense_key == 0x2) {
++				/*
++				 * Spacewar after ABL: 2/04/02 "initializing command required",
++				 * the device is not in the Active power mode. Wake it through
++				 * the UFS Device well-known LU (UPIU LUN 0xd0).
++				 */
++				uint8_t lun = su.lun;
++				su.lun = 0xd0;
++				(void)ufs_scsi(ssu_active, sizeof(ssu_active), 0, false);
++				su.lun = lun;
++			}
+ 			delay(50000);
+ 		}
+ 	}
