@@ -598,10 +598,13 @@ static void gsi_trace(unsigned us)
 	uint64_t t0 = ticks(), end = t0 + 192ULL * us / 10;
 	int lines = 0;
 	while (ticks() < end && lines < 14) {
-		uint32_t v[6] = {
-			rd(CH_CTX(0) + 0x10), rd(EV_CTX + 0x10), rd(G(0x23080)) << 16 | rd(G(0x23118)),
-			rd(SE(0x40)), rd(SE(0x610)), rd(SE(0xc40)),
-		};
+		/* touch8 t1 froze without a dump: mark each register block before its first read */
+		if (lines == 0 && last[0] == ~0u)
+			con_str(" read", "GPI regs");
+		uint32_t v[6] = { rd(CH_CTX(0) + 0x10), rd(EV_CTX + 0x10), rd(G(0x23080)) << 16 | rd(G(0x23118)) };
+		if (lines == 0 && last[0] == ~0u)
+			con_str(" read", "SE13 regs");
+		v[3] = rd(SE(0x40)), v[4] = rd(SE(0x610)), v[5] = rd(SE(0xc40));
 		int changed = 0;
 		for (int i = 0; i < 6; i++)
 			changed |= v[i] != last[i], last[i] = v[i];

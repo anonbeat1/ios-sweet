@@ -238,9 +238,9 @@ Separate effort from sweet; sweet handoff below is unchanged.
     TX-only 0x55 write, no RX channel use): `shim/out/spacewar-touch8-t1.img` = CONFIG0 alone, then GO(TX_ONLY)+DMA;
     `shim/out/spacewar-touch8-t2.img` = CONFIG0+GO+DMA chained (Linux order). Dumps show m_cmd0 and SE DMA TX irq too.
     **touch8 t1 result (19:12, photo)**: NOP and standalone CONFIG0 complete (EOB events) as in touch7; last line "GO+DMA TX
-    doorbell in 3 s", then reset (CrashDump presumably; "TOUCH test done" never shown) => **a TX-only GO that executes
-    resets the SoC within 2 s** (touch7's full-duplex GO only stalled, probably waiting on the linked RX side). The CPU only
-    spins on CNTPCT in that window, so the reset is asynchronous (TZ/hyp/NoC/watchdog), not a CPU fault. t2 not run.
+    doorbell in 3 s" and **no crash (user): the screen froze there, the "->" dump never appeared** => after a TX-only GO
+    the CPU most likely hangs on an MMIO read in the dump (GPI ch/ev RP or SE13 GENI registers: bus stall), whereas
+    touch7's full-duplex GO stalled with readable registers. touch6's CrashDump may be the same stall ending in a bite.
     touch9 (`shim/out/spacewar-touch9-trace.img`, TOUCH_TEST 1): prints S5 RCG DFSR/PERF0 and SE CLK_SEL/M_CLK_CFG after
     CONFIG0, then after the GO doorbell prints a line (us since doorbell, ch0 rp, ev rp, GPII irq|gen, GENI status, M_IRQ)
     on every change, max 14 entries.
