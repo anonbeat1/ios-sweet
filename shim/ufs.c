@@ -60,6 +60,8 @@ static struct utrd utrl[32] __attribute__((aligned(1024)));
 static struct ucd ucd __attribute__((aligned(128)));
 static uint8_t data[2 * BLOCK] __attribute__((aligned(4096)));
 
+static uint32_t last_ms;	/* duration of the last completed command */
+
 static uint64_t ticks(void)
 {
 	uint64_t t;
@@ -119,12 +121,14 @@ static uint32_t scsi(uint8_t lun, const uint8_t *cdb, unsigned cdb_len, void *bu
 
 	ufs_wr(REG_UTRLDBR, 1);
 	uint64_t start = ticks();
+	last_ms = 0;
 	while (ufs_rd(REG_UTRLDBR) & 1) {
-		if (ticks() - start > 19200000) {	/* 1 s */
+		if (ticks() - start > 10 * 19200000ULL) {	/* 10 s (Spacewar: slow wake from power down) */
 			ufs_wr(REG_UTRLCLR, ~1u);	/* clear slot 0 (write 0 to the bit) */
 			return 1;			/* timeout */
 		}
 	}
+	last_ms = (ticks() - start) / 19200;
 	__asm__ volatile("dsb sy" ::: "memory");
 	*ocs_out = utrl[0].dw2 & 0xff;
 	*status_out = ucd.resp[7];		/* SCSI status in the response UPIU */
@@ -250,7 +254,7 @@ void test_ufs(void)
 		if ((sense[2] & 0xf) == 2) {
 			static const uint8_t ssu[6] = { 0x1b, 0, 0, 0, 0x10, 0 };
 			rc = scsi(0xd0, ssu, sizeof(ssu), 0, 0, &ocs, &st);
-			con_hex2("UFS SSU", "rc=", rc, "ocs/st=", ocs << 8 | st);
+			con_hex2("UFS SSU", "rc=", rc, "ms=", last_ms);
 		}
 	}
 
@@ -262,10 +266,15 @@ void test_ufs(void)
 	if (!rc)
 		con_hex2("UFS LUN0", "lastlba=", be32(data), "blk=", be32(data + 4));
 
-	/* READ(10) LBA 0, 2 blocks: protective MBR and the GPT header. */
+	/* READ(10) LBA 0, 2 blocks: protective MBR and the GPT header. Timed retries. */
 	static const uint8_t rd10[10] = { 0x28, 0, 0, 0, 0, 0, 0, 0, 2, 0 };
-	rc = scsi(0, rd10, sizeof(rd10), data, 2 * BLOCK, &ocs, &st);
-	con_hex2("UFS READ", "rc=", rc, "ocs/st=", ocs << 8 | st);
+	for (int i = 0; i < 6; i++) {
+		rc = scsi(0, rd10, sizeof(rd10), data, 2 * BLOCK, &ocs, &st);
+		con_hex2("UFS READ", "rc=", rc, "ms=", rc == 1 ? 10000 : last_ms);
+		if (rc != 1)
+			break;
+		con_hex2("UFS READ", "is=", ufs_rd(REG_IS), "ocs=", utrl[0].dw2 & 0xff);
+	}
 	if (rc)
 		return;
 	con_hex2("UFS MBR", "sig=", data[510] | data[511] << 8, "type=", data[450]);
