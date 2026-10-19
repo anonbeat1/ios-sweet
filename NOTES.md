@@ -115,6 +115,10 @@ Separate effort from sweet; sweet handoff below is unchanged.
   - 0084 boot (16:27): TUR fails 50x with **sense 2/04/02 (NOT READY, initializing command required)** -> same panic. The UFS
     device is not in Active power mode after ABL. xnu 0085: on 2/04/02 send START STOP UNIT (power condition ACTIVE,
     cdb 1b 00 00 00 10 00) to the UFS Device W-LU (UPIU LUN 0xd0), like Linux ufshcd_set_dev_pwr_mode, then retry TUR.
+  - 0085 boot (16:37): one TUR 2/04/02, SSU, then TUR OK (**SSU fix works**); next "SWEET UFS: command 0x28 timed out"
+    (READ(10) of GPT LBA 1, 5 s) -> panic "ufsroot0 unavailable: 60". Commands without data complete (host writes the
+    response UPIU), the first data-in command does not. xnu 0086: timeout prints IS/HCS/DBR/OCS/UPIU/dma PA, and boot-arg
+    `ufsdma32=1` allocates the DMA memory below 4 GiB (test whether DMA above 4 GiB is the problem).
   - Never press START in ABL's fastboot menu now: Android would find a non-f2fs userdata and may offer to format it.
   Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
   Partition backups to take: persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots.
