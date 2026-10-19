@@ -139,7 +139,13 @@ Separate effort from sweet; sweet handoff below is unchanged.
     UFS; the iOS root mounted from userdata and userland came up to SpringBoard** (user saw `SMP SpringBoard t3` sampler
     lines = SpringBoard alive). Very slow: cpus=1 + kernel console drawn over the GUI. Hypothesis confirmed by result only
     (no rail readback): ABL leaves UFS VCC off after powering the device down.
-  - Next boot: cpus=8 sweetfb_noconsole=1 (drop -enable_kprintf_spam) like the sweet README.
+  - Fast boot (17:25, `spacewar-xnu-0087-fast.img`, cpus=8 sweetfb_noconsole=1): stayed on the Apple logo >13 min. Diag boot
+    (17:39, `spacewar-xnu-0087-diag.img`, cpus=8, console on): bluetoothd/fairplayd.H2/xpcproxy relaunch loop (same as sweet,
+    no hardware). Sampler, symbolicated with `ipsw dyld a2s <SystemOS cryptex dyld_shared_cache_arm64> <addr - slide>`
+    (SpringBoard[26] slide 0x2a3c000): **SpringBoard t0 waits in LSContextInit (os_unfair_lock) from
+    -[CCSModuleRepository _queue_filterModuleMetadataByAssociatedBundleAvailability:] -> LSApplicationRecord; t1 in
+    `__LAUNCH_SERVICES_IS_RESEEDING_ITS_DATABASE_AND_MAY_BLOCK__` (sync NSXPC to lsd)**: first boot of a fresh image rebuilds
+    the LaunchServices database (sweet's images had done this in earlier boots). Expected one-time; waiting.
   - Never press START in ABL's fastboot menu now: Android would find a non-f2fs userdata and may offer to format it.
   Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
   Partition backups to take: persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots.
