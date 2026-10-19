@@ -101,6 +101,18 @@ Separate effort from sweet; sweet handoff below is unchanged.
     "debug_log_init: Error!! gPanicBase is still not initialized" also shows (seen before on sweet? unverified).
   - Next: iOS root into Spacewar userdata (sda10, ~107 GB): **destructive, needs the user's OK**; needs the iOS root image
     (built on the Linux host with tools/mkiosroot.sh; not on this Mac) and research/ipsw-x/d22ap.adt for /product.
+  - **iOS root on Spacewar userdata (user approved, 2026-10-19 16:05)**: IPSW members fetched with tools/remotezip.py into
+    `spacewar-stock/ipsw/` (OS 087-86698-044, SystemOS 087-86593-047, AppOS 087-86715-047, DeviceTree.d22ap -> research/
+    ipsw-x/d22ap.adt). Built on macOS with the new `tools/mkiosroot-macos.sh` (sudo, run by the user; log
+    `spacewar-stock/mkiosroot.log`: 11 GiB used, fsck_hfs OK; "no mobileactivationd system container" is expected on a
+    fresh image) -> `spacewar-stock/ios16-root-20H392-spacewar.img` (16 GiB raw). fastboot 37 could not read the raw
+    image ("Failed reading from userdata"), so `tools/img2simg.py` (zero blocks as FILL 0) -> `.simg` (10.9 GiB data,
+    26103 chunks); user ran `fastboot flash userdata ...simg`: 15/15 OK, 304 s. **Android is gone; recover with fastboot -w.**
+  - Boot `shim/out/spacewar-xnu-0083-root.img` (rd=ufsroot0 ufsrw=1 rootrw=1 ... cpus=1, sweet drivers off): fastboot hung
+    at "Booting" once (replug, retry). Kernel up to BSD, then "SWEET UFS: command 0x00 failed: ocs 0x0 upiu 0x21 response
+    0x1 status 0x2" x3 -> panic "IOFindBSDRoot: SWEET UFS root ufsroot0 unavailable: 5". TEST UNIT READY gets CHECK
+    CONDITION three times. xnu 0084: print autosense key/ASC/ASCQ and retry TUR up to 50 x 50 ms on UNIT ATTENTION/NOT READY.
+  - Never press START in ABL's fastboot menu now: Android would find a non-f2fs userdata and may offer to format it.
   Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
   Partition backups to take: persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots.
 

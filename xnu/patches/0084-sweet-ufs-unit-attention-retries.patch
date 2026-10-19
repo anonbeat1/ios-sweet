@@ -1,0 +1,45 @@
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 6b926fe..c44dc28 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -103,6 +103,7 @@ static struct {
+ 	vm_offset_t dma;                        /* kernel VA of the DMA allocation */
+ 	uint64_t dma_pa;
+ 	uint8_t lun;
++	uint8_t sense_key;      /* of the last CHECK CONDITION (fixed-format autosense) */
+ 	uint8_t tag;
+ 	uint64_t first_block, nblocks;          /* partition, in 4 KiB device blocks */
+ 	uint32_t secsize;                       /* logical sector size for the BSD layer */
+@@ -249,8 +250,13 @@ ufs_scsi(const uint8_t *cdb, unsigned cdb_len, uint32_t len, bool write)
+ 
+ 	uint32_t ocs = utrd->dw2 & 0xff;
+ 	if (ocs || ucd->resp[0] != 0x21 || ucd->resp[6] || ucd->resp[7]) {
+-		printf("SWEET UFS: command 0x%02x failed: ocs 0x%x upiu 0x%x response 0x%x status 0x%x\n",
+-		    cdb[0], ocs, ucd->resp[0], ucd->resp[6], ucd->resp[7]);
++		/* RESPONSE UPIU: sense data length at 32, fixed-format sense data from 34. */
++		const uint8_t *sense = &ucd->resp[34];
++		su.sense_key = ucd->resp[33] >= 14 ? (sense[2] & 0x0f) : 0;
++		printf("SWEET UFS: command 0x%02x failed: ocs 0x%x upiu 0x%x response 0x%x status 0x%x"
++		    " sense %x/%02x/%02x\n",
++		    cdb[0], ocs, ucd->resp[0], ucd->resp[6], ucd->resp[7],
++		    su.sense_key, sense[12], sense[13]);
+ 		return EIO;
+ 	}
+ 	return 0;
+@@ -625,8 +631,14 @@ sweet_ufs_init(void)
+ 	error = ufs_take_over_host();
+ 	if (!error) {
+ 		static const uint8_t tur[6] = { 0x00 };
+-		/* The first command after the bootloader may report a unit attention. */
+-		for (int i = 0; i < 3 && (error = ufs_scsi(tur, sizeof(tur), 0, false)); i++) {
++		/*
++		 * The first commands after the bootloader report unit attentions (one
++		 * per command; Spacewar after a fastboot flash: more than three) or
++		 * NOT READY: retry those for up to ~2.5 s, give up on anything else.
++		 */
++		for (int i = 0; i < 50 && (error = ufs_scsi(tur, sizeof(tur), 0, false)) &&
++		    (su.sense_key == 0x6 || su.sense_key == 0x2); i++) {
++			delay(50000);
+ 		}
+ 	}
+ 	if (!error) {
