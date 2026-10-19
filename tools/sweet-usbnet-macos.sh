@@ -22,7 +22,12 @@ echo "waiting for the phone's USB Ethernet..." >&2
 ifname=""
 while [ -z "$ifname" ]; do ifname=$(find_if || true); [ -z "$ifname" ] && sleep 1; done
 echo "interface: $ifname" >&2
-sudo ifconfig "$ifname" inet 192.168.7.1 netmask 255.255.255.0 up
+if [ -t 0 ]; then
+	sudo ifconfig "$ifname" inet 192.168.7.1 netmask 255.255.255.0 up
+else
+	# no terminal (e.g. Claude Code's ! prompt): macOS admin-password dialog instead of sudo
+	osascript -e "do shell script \"/sbin/ifconfig $ifname inet 192.168.7.1 netmask 255.255.255.0 up\" with administrator privileges"
+fi
 echo "$ifname up: 192.168.7.1 <-> phone 192.168.7.2" >&2
 # share the Mac's internet to the phone (optional): enable IP forwarding + a
 # pf NAT rule on the uplink. Left to the user; link-local works without it.
