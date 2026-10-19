@@ -412,6 +412,12 @@ Separate effort from sweet; sweet handoff below is unchanged.
     the Mac** as "Sweet iOS (USB Ethernet)", en7, peer MAC 02:00:5e:77:ee:01, status active (~200 s after fastboot boot):
     the first DWC3 DMA no longer resets the SoC with the SMR-reuse fix (which SMR/s2cr line printed not yet seen: photo
     pending). Host IP not yet set (the script needs sudo), so ping 192.168.7.2 untested.
+    **MILESTONE (22:28): USB networking works on Spacewar**: Mac en7 192.168.7.1, `ping 192.168.7.2` 4/4, 0.9-2.7 ms; live
+    kernel log streams to the Mac (UDP 5140, `tools/sweet-usbnet-macos.sh`; from Claude Code's `!` prompt sudo has no TTY,
+    the script now falls back to the macOS admin dialog; or run it in Terminal). Log shows SpringBoard/AKS, power key
+    (SWEET KEYS/HID), "SWEET USB: ue0 rx 276 tx 74 frames", and the known bluetoothd/fairplayd relaunch loop. The log
+    window starts mid-run, so the "SWEET SMMU: sid 0xe0 already matched by smr N" line was not captured yet (needs a photo
+    or the persistent log). Daily image candidate: 0091 kernel with sweetusb=2 + touch on + sweetfb_noconsole=1.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
