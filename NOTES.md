@@ -1,5 +1,30 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## Second port: Nothing Phone (1) "Spacewar" (SM7325P / YupikP) - started 2026-10-19
+
+Separate effort from sweet; sweet handoff below is unchanged.
+- Device: A063 SpacewarEEA, Nothing OS 3.0 `AQ3A.240929.001/2501081938` (= archive tag Spacewar_V3.0-250108-1938), slot `_b`.
+  OEM unlock allowed; user ran `fastboot flashing unlock` on 2026-10-19 (not re-verified by getvar yet). No root, no recovery yet.
+  Note: `adb reboot bootloader` left the Mac seeing no USB device; user entered fastboot by hand (Power + Vol-).
+- Stock images (not in git): `~/Desktop/esrever/spacewar-stock/V3.0-250108-1938/` (boot, vendor_boot, dtbo, vbmeta from
+  github.com/spike0en/nothing_archive, sha256 match). boot.img = **header v3** (no dtb in boot), arm64 Image text_offset 0x80000;
+  vendor_boot v3: ramdisk_addr 0x1000000, dtb_addr 0x1f00000, 22 concatenated base DTBs. Board = base "YupikP SoC"
+  (msm-id 0x1f3) + dtbo entry 26 "YupikP QRD" (has aw210xx Glyph LED, st21nfc, goodix_fp, tfa98xx -> Nothing's board).
+- Facts from stock DT (observed in DT; NOT yet measured on hardware):
+  - CPUs: 8 x `qcom,kryo`, MPIDR 0x000..0x700 (4 A55 + 3 A78 + 1 A78 prime). GICv3 GICD 0x17a00000, GICR 0x17a60000 (same as sweet).
+  - UFS ufshc 0x1d84000 (same as sweet). SPMI arbiter same layout as sweet (core 0xc440000, obsrvr 0xe600000, cnfg 0xc40a000).
+    PON/keys are on PMK8350 -> new PON/APID needed. RPMh apps_rsc 0x18200000 (drv2 0x18220000).
+  - USB: DWC3 0xa600000, HS PHY **qcom,usb-hsphy-snps-femto** @0x88e3000 (not QUSB2 -> 0072/0074 must change).
+  - Touch: **SPI** on QUP SE13 (`qupv3_se13_spi`), `qcom,spi-touch-active = "focaltech,fts_ts"`; alternative goodix gt9916S. Not I2C.
+  - Panel: Visionox **rm692e5, DSI command mode** (TE pin, sw trigger). ABL splash region 0xe1000000 size 0x2300000.
+    => writing the splash fb will NOT refresh the panel by itself; need an MDP/DSI cmd-mode kick per frame (risk #1).
+  - RAM low bank reserved: hyp@0x80000000, ... mpss to 0x9d300000, wlan 0x9ae00000+0x1900000, ramoops 0xa9000000,
+    removed 0xc0000000+0x5100000, trustedvm 0xd0800000.., splash 0xe1000000.., dfps 0xe3300000+0x100000.
+    Candidate gaps: 0xa9200000-0xc0000000, 0xe3400000-0x100000000; high bank unknown (need live /proc/iomem / live FDT).
+- Next: (1) confirm `fastboot getvar unlocked`; (2) `fastboot boot` stock boot.img to prove temp boot works on this ABL;
+  (3) shim v3 boot image that colours the splash fb + tries a cmd-mode kick; (4) temp root (Magisk-patched boot via fastboot boot)
+  to pull live FDT, /proc/iomem and partition backups (persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots).
+
 ## Agent handoff / active work (2026-10-15, latest)
 
 ### >>> UPDATE 2026-10-18 (read first, then the 10-17 handoff below) <<<
