@@ -340,8 +340,13 @@ Separate effort from sweet; sweet handoff below is unchanged.
     routes to it when ADT /sweet-fts-spi exists (sweet keeps Goodix). `sweet_rpmh.c` whitelist extended for ldoc8
     1.7-1.9 V and ldoc3 3.0-3.4 V. `tools/mkadt.py --spacewar --ft-fw FILE.i` reads the Focaltech .i and puts the
     119284-byte blob in ADT /sweet-fts-spi "firmware" (out of git). Syntax-checked with a stub prelude; CI is authoritative.
-    Next: CI build on anonbeat1/ios-sweet (patch 0089), then boot `spacewar-xnu-0089` with an ADT built via
-    `mkadt.py --spacewar --ft-fw <.i>` and touch enabled; verify SpringBoard sees touches (unlock, home gesture).
+    **0089 CI build SUCCESS** (run 39299747583 on anonbeat1/ios-sweet -> `xnu/out-0089`). Images built (not booted yet):
+    ADT `shim/out/sweet-0089sw.adt` (= mkadt --spacewar --ft-fw V27 .i, 132756 B incl. the firmware), kernel
+    kernel.development.sweet. `shim/out/spacewar-xnu-0089-fast.img` (cpus=8, sweetfb_noconsole=1, sweetusb=0, touch+keys on,
+    rd=ufsroot0 ufsrw=1 rootrw=1) for a clean GUI to try unlocking by touch; `shim/out/spacewar-xnu-0089-diag.img` (console
+    on, sweettouchdelay=20) to read the `SWEET FTS:` init lines (SMMU cb, GPII 0, boot id, fw ecc, app chip id). Driver
+    starts 20-30 s after boot. NEXT: `fastboot boot spacewar-xnu-0089-fast.img`, wait for the lock screen, try to swipe/tap;
+    if dead, boot the diag image and read where SWEET FTS stops.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
