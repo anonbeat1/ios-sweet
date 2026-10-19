@@ -7,4 +7,6 @@ extern volatile uintptr_t sw_ctl;
 
 int sw_display_init(void);	/* 0 ok, -1 no scanout pipe, -2 unexpected format/ctl */
 void sw_display_dump(void);
+void sw_kick(void);
+int sw_autorefresh(void);	/* TE line-counter moves: before << 16 | after */
 void __attribute__((noreturn)) sw_kick_loop(void);

@@ -28,6 +28,20 @@
 #define CTL_FLUSH	0x18
 #define CTL_START	0x1c
 #define PP_AUTOREFRESH	0x30
+#define PP_LINE_COUNT	0x2c
+/*
+ * DPU >= 5 keeps tear check + autorefresh in the INTF block (mainline
+ * dpu_hw_intf.c INTF_TEAR_*): probe 1 read PP autorefresh as 0.
+ */
+#define INTF1		(MDP + 0x36000)		/* sde-intf-off[1], type dsi */
+#define TE_EN		0x280
+#define TE_VSYNC	0x284
+#define TE_HEIGHT	0x288
+#define TE_WRCOUNT	0x28c
+#define TE_THRESH	0x298
+#define TE_START	0x29c
+#define TE_LINE_COUNT	0x2a8
+#define TE_AUTOREFRESH	0x2ac
 
 #define rsr(r) ({ uint64_t _v; __asm__ volatile("mrs %0, " r : "=r"(_v)); _v; })
 
@@ -85,6 +99,42 @@ void sw_display_dump(void)
 		con_hex2(l, "autoref=", rd32(pp + PP_AUTOREFRESH), "flush=", rd32(c + CTL_FLUSH));
 	}
 	con_hex("KICKCTL", sw_ctl);
+	con_hex2("TE", "en=", rd32(INTF1 + TE_EN), "vsync=", rd32(INTF1 + TE_VSYNC));
+	con_hex2("TE", "height=", rd32(INTF1 + TE_HEIGHT), "wrcnt=", rd32(INTF1 + TE_WRCOUNT));
+	con_hex2("TE", "start=", rd32(INTF1 + TE_START), "thresh=", rd32(INTF1 + TE_THRESH));
+	con_hex2("TE", "autoref=", rd32(INTF1 + TE_AUTOREFRESH), "line=", rd32(INTF1 + TE_LINE_COUNT));
+	con_hex2("PP0", "line=", rd32(MDP + 0x6a000 - shift + PP_LINE_COUNT), 0, 0);
+}
+
+void sw_kick(void)
+{
+	__asm__ volatile("dsb sy" ::: "memory");
+	wr32(sw_ctl + CTL_START, 1);
+}
+
+/* How often the INTF tear line counter changed in ~100 ms (0 = no frames moving). */
+static int te_moves(void)
+{
+	uint64_t f = rsr("cntfrq_el0"), end = rsr("cntpct_el0") + f / 10;
+	uint32_t last = rd32(INTF1 + TE_LINE_COUNT);
+	int moves = 0;
+
+	while (rsr("cntpct_el0") < end) {
+		uint32_t v = rd32(INTF1 + TE_LINE_COUNT);
+		moves += v != last;
+		last = v;
+	}
+	return moves;
+}
+
+/* MDP refreshes the panel on every TE by itself: frame_count 1, then one kick. */
+int sw_autorefresh(void)
+{
+	int idle = te_moves();
+
+	wr32(INTF1 + TE_AUTOREFRESH, 1U << 31 | 1);
+	sw_kick();
+	return idle << 16 | te_moves();
 }
 
 void __attribute__((noreturn)) sw_kick_loop(void)

@@ -382,20 +382,37 @@ void shim_main(uint64_t dtb)
 	struct mmu_info mi;
 
 #ifdef SPACEWAR
-	/* Probe 2. A cmd-mode panel needs kicks: CPU7 does them from here on. */
+	/*
+	 * Probe 3. Cmd-mode panel: probe 2's free-running 20 ms kicks gave only
+	 * torn/noisy bands. Page 0: one kick after drawing, then INTF autorefresh
+	 * with no further kicks (TICK rows appear only if it works).
+	 */
 	stage = "display";
 	if (sw_display_init() == -1 || !sw_ctl)
 		reset(10);	/* nothing on screen: a ~10 s reboot means "no scanout pipe" */
-	smc(PSCI_CPU_ON, (uint64_t)SW_KICK_CPU << 8, (uintptr_t)secondary_entry, SW_KICK_CPU);
+	con_clear(BLUE);
+	con_str("SHIM", "spacewar probe 3, page 0");
+	sw_display_dump();
+	con_str("KICK", "single kick, autoref in 8s");
+	sw_kick();
+	delay_ms(8000);
+	int ar = sw_autorefresh();
+	con_hex2("AUTOREF", "idle=", ar >> 16, "on=", ar & 0xffff);
+	for (int i = 1; i <= 10; i++) {
+		con_hex2("TICK", "n=", i, 0, 0);
+		delay_ms(1000);
+	}
+	if (!(ar & 0xffff))	/* no autorefresh: fall back to probe 2's kick CPU */
+		smc(PSCI_CPU_ON, (uint64_t)SW_KICK_CPU << 8, (uintptr_t)secondary_entry, SW_KICK_CPU);
 	con_clear(RED);
-	con_str("SHIM", "spacewar probe 2, page 1/2");
+	con_str("SHIM", "spacewar probe 3, page 1/2");
 	con_hex2("DTB", "at=", dtb, "magic=", dtb ? __builtin_bswap32(rd32(dtb)) : 0);
 	con_hex2("MIDR", "cpu0=", rsr("midr_el1"), "el=", rsr("CurrentEL") >> 2);
 	con_hex2("CNTFRQ", "hz=", rsr("cntfrq_el0"), 0, 0);
 	con_skip();
 	sw_display_dump();
 	con_skip();
-	test_smp();	/* CPU7 already runs the kick loop: expect ALREADY_ON */
+	test_smp();	/* without autorefresh CPU7 runs the kick loop: ALREADY_ON */
 	con_skip();
 	con_str("PAGE 2", "in 45s");
 	delay_ms(45000);
@@ -435,7 +452,7 @@ void shim_main(uint64_t dtb)
 #ifndef SPACEWAR
 	con_str("SHIM", "sweet milestone 3");
 #else
-	con_str("SHIM", "spacewar probe 2, page 2/2");
+	con_str("SHIM", "spacewar probe 3, page 2/2");
 #endif
 	con_skip();
 	con_hex2("DTB", "at=", dtb, "magic=", dtb ? __builtin_bswap32(rd32(dtb)) : 0);
