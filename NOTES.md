@@ -119,6 +119,14 @@ Separate effort from sweet; sweet handoff below is unchanged.
     (READ(10) of GPT LBA 1, 5 s) -> panic "ufsroot0 unavailable: 60". Commands without data complete (host writes the
     response UPIU), the first data-in command does not. xnu 0086: timeout prints IS/HCS/DBR/OCS/UPIU/dma PA, and boot-arg
     `ufsdma32=1` allocates the DMA memory below 4 GiB (test whether DMA above 4 GiB is the problem).
+  - 0086 + ufsdma32=1 (16:54): same READ(10) timeout with DMA at 0xe81a8000 (<4 GiB): "is 0x0 hcs 0x10f dbr 0x1 ocs 0xf
+    upiu 0x0" = request never completed, no host error. DMA height is not the cause.
+  - **Shim UFS probe** (`shim/out/spacewar-ufsprobe.img`, 4829092, MMU off right after ABL, read-only): UFSHCI ver 0x300,
+    cap 0x1587031F (64AS, crypto supported), hce=1 (CGE=0: crypto NOT enabled), hcs 0x10F, is 0x400 (UCCS), ABL list at
+    0x9EE43000. TUR -> 2/04/02; SSU to W-LU 0xd0 **timed out at 1 s**; TUR then OK; **READ CAPACITY(10) OK** (8 bytes data-in:
+    last LBA 0x1C457FF, 4096-byte blocks = LUN 0 / sda, 113 GB); **READ(10) 2 blocks timed out (1 s)**. So the DMA data path
+    works; media reads hang. Hypothesis (unverified): device still finishing the wake from Power Down (after a 16 GB write).
+    Probe 2 (50e0722): 10 s timeouts, SSU duration in ms, READ retried 6x with timing.
   - Never press START in ABL's fastboot menu now: Android would find a non-f2fs userdata and may offer to format it.
   Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
   Partition backups to take: persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots.
