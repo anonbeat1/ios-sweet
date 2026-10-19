@@ -401,7 +401,8 @@ void shim_main(uint64_t dtb)
 	con_skip();
 	stage = "touch";
 	test_touch();	/* state ABL left (votes the SE13 clocks) */
-	touch_bringup();	/* rails, pins, GENI SPI, FT3680 boot id */
+	touch_bringup();	/* rails, pins; stops at the GSI check */
+	gpi_smmu_probe();	/* GPI DMA + SMMU state, read-only */
 	con_str("TOUCH", "probe done, pages in 3 min");
 	delay_ms(180000);
 

@@ -255,14 +255,9 @@ void touch_bringup(void)
 		 * its read-only mirror) with DMA_IF_EN (0x2004) set; the protocol
 		 * firmware itself is the same. Try that without reloading it.
 		 */
-		wr(SE(0x2004), rd(SE(0x2004)) | 1u);	/* DMA_IF_EN */
-		wr(SE(0x2008), rd(SE(0x2008)) & ~1u);	/* FIFO interface on */
-		ifdis = rd(SE(0x64));
-		con_hex2("FIFO IF", "if_dis=", ifdis, "reg=", rd(SE(0x2008)));
-		if (ifdis & 1) {
-			con_str("SE13", "FIFO interface stays disabled: GSI only");
-			return;
-		}
+		/* touch4: even reading SE+0x2004 is an external abort (XPU, TZ-owned). */
+		con_str("SE13", "GSI mode (FIFO switch is TZ-only): needs GPI DMA");
+		return;
 	}
 
 	/* focaltech_flash.c fts_enter_into_boot: reset, 0x55, read boot id 0x90 */
@@ -292,4 +287,46 @@ void touch_bringup(void)
 		}
 	}
 	con_str("FT3680", "no valid boot id");
+}
+
+/* ---- GPI DMA + SMMU state (read-only) ---- */
+
+#define GPI_EE		(0x00a00000UL + 0x10000UL)	/* gpi-top + qcom,gpi-ee-offset */
+#define SMMU		0x15000000UL			/* apps_smmu */
+
+void gpi_smmu_probe(void)
+{
+	con_str("GPI", "probe (read-only): gpi_dma1 GPII 1-4, apps_smmu");
+	/* GPII 0 is static/LE-VM (qcom,static-gpii-mask 1): not touched */
+	for (unsigned n = 1; n <= 4; n++) {
+		uintptr_t g = GPI_EE + 0x4000UL * n;
+		char l[] = "GPII n";
+		l[5] = '0' + n;
+		/* CH_k_CNTXT_0 [23:20] state, [3:0] protocol; EV_k_CNTXT_0 [23:20] state */
+		con_hex2(l, "ch0=", rd(g + 0x20000), "ch1=", rd(g + 0x20080));
+		con_hex2(" ev0", "ctx=", rd(g + 0x21000), "irq=", rd(g + 0x23080));
+	}
+	uint32_t scr0 = rd(SMMU), id0 = rd(SMMU + 0x20);
+	unsigned nsmr = id0 & 0xff;
+	con_hex2("SMMU", "scr0=", scr0, "id0=", id0);
+	static const uint16_t sids[2] = { 0x56, 0x43 };	/* GPI, qupv3_1 wrapper */
+	for (int j = 0; j < 2; j++) {
+		int hits = 0;
+		for (unsigned i = 0; i < nsmr && i < 256; i++) {
+			uint32_t smr = rd(SMMU + 0x800 + 4 * i);
+			uint32_t id = smr & 0xffff, mask = (smr >> 16) & 0x7fff;
+			if (!(smr & (1u << 31)) || ((id ^ sids[j]) & ~mask & 0x7fff))
+				continue;
+			char l[] = "SID xx";
+			l[4] = "0123456789abcdef"[sids[j] >> 4], l[5] = "0123456789abcdef"[sids[j] & 15];
+			/* S2CR [17:16] type: 0 translate, 1 bypass, 2 fault; [7:0] cbndx */
+			con_hex2(l, "smr=", smr, "s2cr=", rd(SMMU + 0xc00 + 4 * i));
+			hits++;
+		}
+		if (!hits) {
+			char l[] = "SID xx";
+			l[4] = "0123456789abcdef"[sids[j] >> 4], l[5] = "0123456789abcdef"[sids[j] & 15];
+			con_hex2(l, "no SMR, usfcfg=", (scr0 >> 10) & 1, 0, 0);
+		}
+	}
 }
