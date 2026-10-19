@@ -245,6 +245,13 @@ void touch_bringup(void)
 	wr(SE(0x7c), 0);
 	wr(SE(0x48), 4u << 4 | 1u);
 	con_hex2("SE13", "hw0=", hw0, "depth=", tx_depth);
+	/* GENI_IF_DISABLE_RO bit 0 FIFO_IF_DISABLE: firmware in GSI mode (spi-msm-geni.c gsi_mode) */
+	uint32_t ifdis = rd(SE(0x64));
+	con_hex2("SE13", "if_dis=", ifdis, "gp_len=", rd(SE(0x644)));
+	if (ifdis & 1) {
+		con_str("SE13", "FIFO interface disabled: GSI (GPI DMA) mode only");
+		return;
+	}
 
 	/* focaltech_flash.c fts_enter_into_boot: reset, 0x55, read boot id 0x90 */
 	for (int i = 0; i < 3; i++) {
