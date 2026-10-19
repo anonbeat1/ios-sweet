@@ -334,4 +334,24 @@ void gpi_smmu_probe(void)
 			con_hex2(l, "no SMR, usfcfg=", (scr0 >> 10) & 1, 0, 0);
 		}
 	}
+
+	/*
+	 * USFCFG=1 faults SID 0x56 (GPI). Map it to bypass in a free stream
+	 * match group, arm-smmu.c order: S2CR first, then the valid SMR.
+	 * Under the Qualcomm hypervisor these writes may be emulated or refused.
+	 */
+	int free_i = -1;
+	for (unsigned i = 0; i < nsmr && i < 256 && free_i < 0; i++)
+		if (!(rd(SMMU + 0x800 + 4 * i) & (1u << 31)))
+			free_i = (int)i;
+	if (free_i < 0) {
+		con_str("SMMU", "no free SMR");
+		return;
+	}
+	uintptr_t s2cr = SMMU + 0xc00 + 4 * (unsigned)free_i, smr = SMMU + 0x800 + 4 * (unsigned)free_i;
+	con_hex2("SMMU", "free smr=", (uint32_t)free_i, "old s2cr=", rd(s2cr));
+	wr(s2cr, 1u << 16);			/* S2CR TYPE = bypass */
+	wr(smr, 1u << 31 | 0x56);		/* SMR VALID, mask 0, id 0x56 */
+	__asm__ volatile("dsb sy" ::: "memory");
+	con_hex2("SMMU", "smr now=", rd(smr), "s2cr now=", rd(s2cr));
 }
