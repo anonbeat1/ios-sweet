@@ -11,6 +11,9 @@
 #include "mmu.h"
 #include "loader.h"
 #include "ufs.h"
+#ifdef SPACEWAR
+#include "touchprobe.h"
+#endif
 
 #define IMEM_RESTART_REASON	0x146aa65cUL	/* qcom,msm-imem restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
@@ -396,9 +399,9 @@ void shim_main(uint64_t dtb)
 	con_skip();
 	con_str("LOADER", loader_boot(dtb));	/* returns only without a payload */
 	con_skip();
-	stage = "ufs";
-	test_ufs();	/* read-only; MMU off, right after ABL */
-	con_str("UFS", "probe done, pages in 3 min");
+	stage = "touch";
+	test_touch();	/* read-only; MMU off, right after ABL */
+	con_str("TOUCH", "probe done, pages in 3 min");
 	delay_ms(180000);
 
 	stage = "page 1";
