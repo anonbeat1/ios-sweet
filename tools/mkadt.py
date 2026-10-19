@@ -51,6 +51,10 @@ SPACEWAR_KEYS = dict(pon_ppid=0x013, pon_rt=0x1310, pwr_mask=0x80, down_mask=0x4
 # base; real time = RTC + Qualcomm time_daemon's offset from persist
 # time/ats_2 (ms), as backed up on 2026-10-19 (valid until the RTC resets).
 SPACEWAR_RTC_BASE, SPACEWAR_RTC_OFFSET_MS = 0x6100, 0x01a15422972b
+# CPU frequency (bsd/dev/sweet_cpufreq.c): EPSS cpufreq-hw domains (live DT
+# qcom,cpufreq-hw-epss freq-domain0/1/2 = A55 / A78 / prime). ABL leaves the
+# A78 and prime domains at LUT row 0 (691 / 806 MHz); the kernel requests the top row.
+SPACEWAR_EPSS = (0x18591000, 0x1000, 0x18592000, 0x1000, 0x18593000, 0x1000)
 
 BOOT_MANIFEST_HASH = hashlib.sha384(b'sweet boot manifest').digest()
 
@@ -236,6 +240,7 @@ def build(seed=None, qemu=False, highmem=False, spacewar=False, ft_fw=None):
         if ft_fw:
             fts_props.append(('firmware', ft_fw))
         rpmh.append(node('sweet-fts-spi', fts_props))
+        rpmh.append(node('sweet-cpufreq', [ph(), ('reg', u64(*SPACEWAR_EPSS))]))
 
     # pmap_compute_max_asids requires the node even when no overrides are set.
     # An absent pmap-max-asids property selects XNU's own MAX_ASIDS default.

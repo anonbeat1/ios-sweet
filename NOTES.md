@@ -357,6 +357,15 @@ Separate effort from sweet; sweet handoff below is unchanged.
     60 Hz, damage-only copy, or render straight into the scanout surface; (4) drop -enable_kprintf_spam / debug=0xc.
     cpufreq1 probe (`shim/out/spacewar-cpufreq1.img`, `shim/cpufreq.c`, no payload): per domain enable|perf, current MHz,
     LUT top index and lo|hi MHz; 50M-add loop time on cpu0, then PERF_STATE = top on all 3 domains, state + loop again.
+    **cpufreq1 result (20:27, photo)**: dom0 A55 enable 3, perf 6 = **1516 MHz** (LUT 300..1804, top row 8); dom1 A78
+    enable 2, perf **0** (LUT 691..2400, top 9); dom2 prime enable 2, perf **0** (LUT 806..2515, top 9). DOMAIN_STATE reads 0
+    for dom1/2 in the shim (their cores are off there). After PERF_STATE = top: dom0 1804 MHz, loop 65.9 -> 55.4 ms (1.19x =
+    1804/1516, consistent). => under iOS (cpus=8) the 3 A78 run at 691 MHz and the prime at 806 MHz (~3.5x below max):
+    likely the main cause of the lag.
+    **xnu 0090** (`0090-sweet-spacewar-cpufreq-max.patch`, applies on 0089): `bsd/dev/sweet_cpufreq.c` requests the top LUT
+    row on every domain of ADT /sweet-cpufreq "reg" (base,size pairs; mkadt --spacewar adds the 3 EPSS domains), called first
+    in sweet_ufs_init (earliest SWEET BSD hook, before the root mount). Logs "SWEET CPUFREQ: domain d level a -> b (MHz)".
+    Boot-args sweetcpufreq=0 (keep ABL levels), sweetcpulevel=N (cap the row). Thermal: hardware LMh/DCVSH still clamps.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
