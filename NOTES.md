@@ -70,9 +70,23 @@ Separate effort from sweet; sweet handoff below is unchanged.
   chip id 0x5662, x 0-1080 y 0-2400, 10 points, irq gpio 417 / reset gpio 441; the Linux driver downloads 119284 bytes of
   firmware into the IC's RAM on every boot** (blob embedded in fts_tp.ko) -> our touch driver must upload it too.
   goodix-berlin@0 fails to probe (not fitted).
-- Next: XNU for Spacewar. (1) shim loader: header v3 => ABL hands the kernel vendor_boot's ramdisk followed by ours, so the
-  payload is not at initrd start; (2) mkadt: memory map above, 8 CPUs, vtimer 27, fb 0xE1000000; (3) first boot `cpus=1`
-  to the framebuffer console; then UFS root in userdata (destructive: confirm with the user first).
+- **XNU for Spacewar, prepared 2026-10-19** (not booted yet):
+  - xnu 0082 (`0082-sweet-early-fb-from-boot-args.patch`): the bootstrap console (start.s stage-0 band + V=P block,
+    sweet_early.c, arm_vm_init final alias) used sweet's fb 0x9c000000, which on Spacewar is inside the wlan carve-out;
+    now boot_args Video.v_baseAddr and its 32 MB block (sweet unchanged). Written against xnu-8796.141.3 + 0001-0081
+    (all apply except 0031/0041, which need the staged HFS sources). **Not built: `git push` was refused** — the only
+    gh account on this Mac (anonbeat1) has READ on dipa-studio/ios-sweet. Commit is local only.
+  - `tools/mkadt.py --spacewar`: dram 0xE4000000 + 0xFC000000, sweet-fbcon reg 0xE1000000, virtual-timer-intid 27.
+  - shim: loader_boot() now scans the initrd for the SWEETXNU magic and moves a 4-byte-aligned payload down to 8-byte
+    alignment (v3 concatenates vendor_boot's ramdisk first); `shim/loader_test.c` host check. Spacewar shim tries the
+    loader first, probe pages without a payload. `build-spacewar.sh PAYLOAD` packs it.
+  - Hardware audit of the sweet kernel (ml_io_map users): UFS (ADT), keys/touch/RPMh/GENI (`sweetkeys=0 sweettouch=0`;
+    they only start after the root partition is found anyway), USB (`sweetusb=0`), SPMI battery (off by default).
+    sweet_ufs only reads (TUR, GPT) until the named partition is found; the persistent log thread starts after that.
+  - First boot plan: `mkadt.py sw.adt --spacewar; mkpayload.py kernel sw.adt pl.bin --cmdline "debug=0xc serial=3 cpus=1
+    keepsyms=1 sweetkeys=0 sweettouch=0 sweetusb=0 ufsroot=ios_none"; shim/build-spacewar.sh pl.bin` -> expect the
+    fbcon log up to "SWEET UFS: no GPT partition named" / root wait. No userdata writes. Then the iOS root in userdata
+    (destructive: ask first).
   Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
   Partition backups to take: persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots.
 

@@ -2,7 +2,8 @@
 """Build the minimal Apple Device Tree that the SWEET xnu needs to boot.
 
 Only what the early boot path actually reads (see NOTES.md); every MMIO
-address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem]
+address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem] [--spacewar]
+--spacewar: Nothing Phone (1) (SM7325): RAM, framebuffer and vtimer from its live FDT and probes 1-7.
 """
 import hashlib, os, struct, sys
 
@@ -32,6 +33,11 @@ VTIMER_INTID = 19
 # QEMU virt (-M virt,gic-version=3 -cpu cortex-a76): GICD/GICR and the generic timer's CNTFRQ
 QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE = 0x08000000, 0x080a0000, 62500000
 QEMU_VTIMER_INTID = 27
+# Spacewar (NOTES.md "Second port"): no firmware carve-out from 0xE3400000 to the
+# end of RAM (0x2_80000000); ABL's splash buffer (VIG0 scanout, refreshed by MDP
+# on its own) at 0xE1000000; standard timer PPIs (vtimer INTID 27).
+SPACEWAR_PHYS_BASE, SPACEWAR_MEM_SIZE = 0xe4000000, 0xfc000000
+SPACEWAR_FB = 0xe1000000
 
 BOOT_MANIFEST_HASH = hashlib.sha384(b'sweet boot manifest').digest()
 
@@ -68,9 +74,12 @@ def node(name, props=(), children=()):
     return n
 
 
-def build(seed=None, qemu=False, highmem=False):
+def build(seed=None, qemu=False, highmem=False, spacewar=False):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
     phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
+    fb, vtimer = FB, VTIMER_INTID
+    if spacewar:
+        phys_base, mem_size, fb, vtimer = SPACEWAR_PHYS_BASE, SPACEWAR_MEM_SIZE, SPACEWAR_FB, QEMU_VTIMER_INTID
     gicd, gicr, timebase = (QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE) if qemu else (GICD, GICR, TIMEBASE)
     seed = seed if seed is not None else os.urandom(64)
     phandle = iter(range(1, 1000))
@@ -152,7 +161,7 @@ def build(seed=None, qemu=False, highmem=False):
         ph(),
         ('compatible', cstr('arm,gic-v3')),
         ('interrupt-controller', b''),
-        ('virtual-timer-intid', u32(QEMU_VTIMER_INTID if qemu else VTIMER_INTID)),
+        ('virtual-timer-intid', u32(QEMU_VTIMER_INTID if qemu else vtimer)),
         ('reg', u64(gicd - SOC_BASE, GICD_SIZE, gicr - SOC_BASE, GICR_SIZE)),
     ])
     arm_io = node('arm-io', [
@@ -181,7 +190,7 @@ def build(seed=None, qemu=False, highmem=False):
 
     fbcon = node('sweet-fbcon', [
         ph(),
-        ('reg', u64(FB, FB_SIZE)),
+        ('reg', u64(fb, FB_SIZE)),
         ('width', u32(FB_W)),
         ('height', u32(FB_H)),
         ('stride', u32(FB_STRIDE)),
@@ -228,7 +237,7 @@ def build(seed=None, qemu=False, highmem=False):
 
 
 if __name__ == '__main__':
-    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv)
+    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv, spacewar='--spacewar' in sys.argv)
     blob = adt.serialize(root)
     open(sys.argv[1], 'wb').write(blob)
     if '--dump' in sys.argv:

@@ -390,6 +390,13 @@ void shim_main(uint64_t dtb)
 	 * refreshing from the splash buffer on its own, and any CTL_START kick
 	 * freezes it. So: never write MDP, just draw (FB_BASE).
 	 */
+	stage = "loader";
+	con_clear(RED);
+	con_str("SHIM", "spacewar: xnu loader");
+	con_skip();
+	con_str("LOADER", loader_boot(dtb));	/* returns only without a payload */
+	delay_ms(5000);
+
 	stage = "page 1";
 	con_clear(RED);
 	con_str("SHIM", "spacewar probe 7, page 1/2");

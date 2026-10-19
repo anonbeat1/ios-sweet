@@ -76,6 +76,29 @@ static int magic_ok(const char *m)
 
 typedef void (*xnu_entry_t)(uint64_t boot_args_pa);
 
+/*
+ * boot.img v3+ (Spacewar): ABL hands over vendor_boot's ramdisk followed by
+ * ours, so the payload starts at a 4-byte offset somewhere in the initrd.
+ * Returns its 8-byte aligned start (moved down if needed), 0 if absent.
+ */
+static uintptr_t find_payload(uint64_t lo, uint64_t *hi)
+{
+	for (uintptr_t a = lo; a + sizeof(struct payload) <= *hi; a += 4) {
+		if (*(volatile uint32_t *)a != 0x45455753 || !magic_ok((const char *)a))	/* "SWEE" */
+			continue;
+		uintptr_t dst = a & ~7UL;
+		if (dst != a) {
+			volatile uint32_t *d = (volatile uint32_t *)dst;
+			volatile const uint32_t *s = (volatile const uint32_t *)a;
+			for (uint64_t i = 0; i < (*hi - a) / 4; i++)
+				d[i] = s[i];
+			*hi -= a - dst;
+		}
+		return dst;
+	}
+	return 0;
+}
+
 const char *loader_boot(uintptr_t dtb)
 {
 	uint64_t rd_start, rd_end;
@@ -85,9 +108,11 @@ const char *loader_boot(uintptr_t dtb)
 		return "no initrd in /chosen";
 	con_hex2("INITRD", "lo=", rd_start, "hi=", rd_end);
 
-	const struct payload *p = (const struct payload *)rd_start;
-	if (!magic_ok(p->magic))
+	rd_start = find_payload(rd_start, &rd_end);
+	if (!rd_start)
 		return "no SWEETXNU payload";
+	const struct payload *p = (const struct payload *)rd_start;
+	con_hex2("PAYLOAD", "at=", rd_start, "end=", rd_end);
 	if (p->version != 1 || (p->adt_off & 7) || (rd_start & 7))
 		return "bad payload header";
 
