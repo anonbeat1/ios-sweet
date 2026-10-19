@@ -228,6 +228,15 @@ Separate effort from sweet; sweet handoff below is unchanged.
     (CONFIG0 + GO + DMA TREs). Unknown whether the TRE fetch (DMA read), the SE programming or the SPI GO kills it.
     touch7 (`shim/out/spacewar-touch7-nop.img`): after gpi_setup, TX ring steps with 3 s / 2 s pauses + dumps: (1) NOP TRE with
     IEOB (GPI fetch + event write only), (2) CONFIG0 alone with IEOB, no chain; then the stepped boot-id transfer as touch6.
+    **touch7 result (19:08, photo, no crash)**: **GPI DMA through SMMU cb7 works**: NOP TRE -> ch0 rp +0x10, ev rp
+    0xA00B3400 -> 3410, event d2 0x04000000 d3 0x00220000 (XFER_COMPLETE type 0x22, code 4 EOB); standalone CONFIG0 (IEOB,
+    no chain) -> same EOB event. Then the stepped full-duplex transfer: RX doorbell ok, **TX doorbell (GO + DMA) did not
+    crash but stayed pending**: ch0 rp stuck on the GO (0xA00B2C20), ch1 rp unchanged, GPII irq 0x8 (IEOB, never
+    cleared), err/glob/gen 0, GENI status 0, M_IRQ 0, SMMU FSR 0x400 (no fault). Rest of the output ran off the screen.
+    So touch6 (CONFIG0 chained into GO) crashed, touch7 (CONFIG0 alone, then GO) stalled. Cause unknown.
+    touch8 (one experiment per image, `EXTRA_CFLAGS=-DTOUCH_TEST=n shim/build-spacewar.sh`, compact dumps, FT reset then a
+    TX-only 0x55 write, no RX channel use): `shim/out/spacewar-touch8-t1.img` = CONFIG0 alone, then GO(TX_ONLY)+DMA;
+    `shim/out/spacewar-touch8-t2.img` = CONFIG0+GO+DMA chained (Linux order). Dumps show m_cmd0 and SE DMA TX irq too.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON

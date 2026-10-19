@@ -410,8 +410,7 @@ static void smmu_fault_report(void)
 		return;
 	uint32_t id1 = rd(SMMU + 0x24);
 	uintptr_t cb = smmu_cbase + ((uintptr_t)smmu_cb << ((id1 >> 31) ? 16 : 12));
-	con_hex2(" cb", "fsr=", rd(cb + 0x58), "far=", rd(cb + 0x60));
-	con_hex2(" cb", "fsynr0=", rd(cb + 0x68), "gfsr=", rd(SMMU + 0x48));
+	con_hex2("", "fsr=", rd(cb + 0x58), "gfsr=", rd(SMMU + 0x48));
 }
 
 /* gpi_send_cmd, polled: wait for the context state field [23:20] */
@@ -503,13 +502,14 @@ static uint32_t gsi_dbg[4];
 
 static void gsi_dump(const char *what)
 {
-	con_str(what, "");
-	con_hex2(" ch0", "ctx=", rd(CH_CTX(0)), "rp=", rd(CH_CTX(0) + 0x10));
-	con_hex2(" ch1", "ctx=", rd(CH_CTX(1)), "rp=", rd(CH_CTX(1) + 0x10));
-	con_hex2(" ev", "ctx=", rd(EV_CTX), "rp=", rd(EV_CTX + 0x10));
-	con_hex2(" gpii", "irq=", rd(G(0x23080)), "err=", rd(G(0x23200)));
-	con_hex2(" gpii", "glob=", rd(G(0x23100)), "gen=", rd(G(0x23118)));
-	con_hex2(" se13", "geni=", rd(SE(0x40)), "m_irq=", rd(SE(0x610)));
+	dc_civac(ev_ring, sizeof(ev_ring));
+	struct tre *e = ev_rp ? &ev_ring[ev_rp - 1] : &ev_ring[0];
+	con_hex2(what, "ch0 rp=", rd(CH_CTX(0) + 0x10), "ch1 rp=", rd(CH_CTX(1) + 0x10));
+	con_hex2("", "ev rp=", rd(EV_CTX + 0x10), "irq=", rd(G(0x23080)));
+	con_hex2("", "ev d2=", e->d[2], "d3=", e->d[3]);
+	con_hex2("", "err=", rd(G(0x23200)), "gl|gen=", rd(G(0x23100)) << 16 | rd(G(0x23118)));
+	con_hex2("", "geni=", rd(SE(0x40)), "m_irq=", rd(SE(0x610)));
+	con_hex2("", "m_cmd0=", rd(SE(0x600)), "dmatx=", rd(SE(0xc40)));
 	smmu_fault_report();
 }
 
@@ -580,18 +580,54 @@ static int gsi_xfer(const uint8_t *tx, uint8_t *rx, unsigned n)
  * ends in CrashDump. Split it: a NOP TRE (GPI fetch + event write, no SE),
  * then CONFIG0 alone (SE programming, no bus traffic), each with IEOB.
  */
-static void gsi_step(const char *what, uint32_t d0, uint32_t d2, uint32_t d3)
+static void gsi_step(const char *what, unsigned n, const struct tre *t)
 {
-	con_hex2(what, "wp=", (uint32_t)(uintptr_t)&tx_ring[(tx_wp + 1) % NTRE], "in 3 s", 0);
+	con_str(what, "TX doorbell in 3 s");
 	udelay(3000000);
-	ring_put(tx_ring, &tx_wp, d0, 0, d2, d3);
+	for (unsigned i = 0; i < n; i++)
+		ring_put(tx_ring, &tx_wp, t[i].d[0], t[i].d[1], t[i].d[2], t[i].d[3]);
 	wr(CH_DB(0), (uint32_t)(uintptr_t)&tx_ring[tx_wp]);
 	udelay(2000000);
 	dc_civac(ev_ring, sizeof(ev_ring));
-	gsi_dump("  ->");
-	con_hex2(" ev[0]", "d2=", ev_ring[ev_rp].d[2], "d3=", ev_ring[ev_rp].d[3]);
 	while ((uint32_t)(uintptr_t)&ev_ring[ev_rp] != rd(EV_CTX + 0x10) && ev_rp < NTRE - 1)
 		ev_rp++;
+	gsi_dump(" ->");
+}
+
+/*
+ * touch7: NOP and CONFIG0 TREs complete (EOB events: GPI DMA through the
+ * SMMU works), but a full-duplex GO + DMA after them stays pending (ch0 RP
+ * stuck on the GO, GENI idle) while touch6's chained CONFIG0 + GO + DMA
+ * crashed. TOUCH_TEST picks one TX-only 0x55 write per boot:
+ *   1: CONFIG0 alone, then GO + DMA     2: CONFIG0 + GO + DMA chained
+ */
+#ifndef TOUCH_TEST
+#define TOUCH_TEST 1
+#endif
+#define TRE_CONFIG0(chain)	{ { 3u << 24 | (8 - 4), 0, 4, 2u << 20 | 2u << 16 | (chain ? 1u : 1u << 8) } }
+#define TRE_GO_TX(n)		{ { 1, 0, 0, 2u << 20 | 1 } }		/* SPI_TX_ONLY, cs 0, chain */
+#define TRE_DMA_TX(n)		{ { (uint32_t)(uintptr_t)dma_tx, 0, n, 1u << 20 | 1u << 9 } }
+
+static void gsi_tests(void)
+{
+	static const struct tre nop[1] = { { { 0, 0, 0, 1u << 16 | 1u << 8 } } };
+	gsi_step("NOP", 1, nop);
+	dma_tx[0] = 0x55, dma_tx[1] = dma_tx[2] = dma_tx[3] = 0;
+	dc_civac(dma_tx, sizeof(dma_tx));
+	ts_reset(0);
+	udelay(1000);
+	ts_reset(1);
+	udelay(8000);
+#if TOUCH_TEST == 1
+	const struct tre c0[1] = { TRE_CONFIG0(0) };
+	gsi_step("CONFIG0", 1, c0);
+	const struct tre go[2] = { TRE_GO_TX(4), TRE_DMA_TX(4) };
+	gsi_step("GO+DMA", 2, go);
+#else
+	const struct tre all[3] = { TRE_CONFIG0(1), TRE_GO_TX(4), TRE_DMA_TX(4) };
+	gsi_step("C0+GO+DMA", 3, all);
+#endif
+	con_str("TOUCH", "test done");
 }
 
 /* Returns 0 when transfers can go through the GPI. */
@@ -608,9 +644,6 @@ static int touch_gsi_init(void)
 		smmu_fault_report();
 		return -1;
 	}
-	gsi_step("NOP", 0, 0, 1u << 16 | 1u << 8);			/* NOP, ieob */
-	gsi_step("CONFIG0", 3u << 24 | (8 - 4), 4, 2u << 20 | 2u << 16 | 1u << 8);	/* ieob, no chain */
-	gsi_cfg_done = 1;
-	use_gsi = 1;
-	return 0;
+	gsi_tests();
+	return -1;	/* the boot-id loop waits for a working GO */
 }
