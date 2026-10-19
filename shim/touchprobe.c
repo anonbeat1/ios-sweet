@@ -640,7 +640,8 @@ static void gsi_step(const char *what, unsigned n, const struct tre *t)
 #ifndef TOUCH_TEST
 #define TOUCH_TEST 1
 #endif
-#define TRE_CONFIG0(chain)	{ { 3u << 24 | (8 - 4), 0, 4, 2u << 20 | 2u << 16 | (chain ? 1u : 1u << 8) } }
+/* touch11: div 8 so a CONFIG0 that reaches the SE shows up as M_CLK_CFG 0x81 (we left 0x41) */
+#define TRE_CONFIG0(chain)	{ { 3u << 24 | (8 - 4), 0, 8, 2u << 20 | 2u << 16 | (chain ? 1u : 1u << 8) } }
 #define TRE_GO_TX(n)		{ { 1, 0, 0, 2u << 20 | 1 } }		/* SPI_TX_ONLY, cs 0, chain */
 #define TRE_DMA_TX(n)		{ { (uint32_t)(uintptr_t)dma_tx, 0, n, 1u << 20 | 1u << 9 } }
 
@@ -656,10 +657,13 @@ static void gsi_tests(void)
 	udelay(8000);
 #if TOUCH_TEST == 1
 	const struct tre c0[1] = { TRE_CONFIG0(0) };
+	wr(SE(0x268), (rd(SE(0x268)) & ~0x3ffu) | 0x1f);	/* bogus word len: CONFIG0 should set 4 */
 	gsi_step("CONFIG0", 1, c0);
 	/* RCG DFS (clk-rcg2.c: CMD_DFSR +0x14, PERF_DFSR(0) +0x1c) and what CONFIG0 left in the SE */
 	con_hex2("S5 RCG", "dfsr=", rd(GCC + 0x18600 + 0x14), "perf0=", rd(GCC + 0x18600 + 0x1c));
 	con_hex2("SE13", "clk_sel=", rd(SE(0x7c)), "m_clk=", rd(SE(0x48)));
+	con_hex2("SE13", "word=", rd(SE(0x268)), "txpack=", rd(SE(0x260)));
+	con_hex2("SE13", "gsi_ev=", rd(SE(0xe18)), "dma_mode=", rd(SE(0x258)));
 	const struct tre go[2] = { TRE_GO_TX(4), TRE_DMA_TX(4) };
 	gsi_step("GO+DMA", 2, go);
 #else

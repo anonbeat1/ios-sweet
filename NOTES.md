@@ -254,6 +254,13 @@ Separate effort from sweet; sweet handoff below is unchanged.
     gpi_find_avail_gpii() uses qcom,static-gpii-mask 0x1 = **GPII 0**, not GPII 1-4 (we used 1). Linux sets GPII 0 up the
     same way (ALLOCATE/START). touch10 (`shim/out/spacewar-touch10-gpii0.img`): GPII 0 (stops if already allocated), NOP,
     CONFIG0, GO TX 0x55 with trace, then if the GO completed a full-duplex boot-id read (0x90) with CRC check.
+    **touch10 result (19:21, photo)**: GPII 0 was free (ch0/ev 0), came up (ch0 0x1020000A, ch1 0x10200102, ev 0x10110002:
+    EE field 0, GPII 1 showed EE 1), NOP + CONFIG0 EOB events, **GO still pending exactly as on GPII 1** (ch0 rp on the GO,
+    GENI 0, M_IRQ 0, M_CMD0 0, no SMMU/GPI error). So the GPII choice is not the (only) problem. SPI DT node has no
+    qcom,shared_se / le-vm (no LOCK TRE needed).
+    touch11 (`shim/out/spacewar-touch11-cfg.img`, GPII 0): CONFIG0 with div 8 and a bogus SE word length (0x1f) beforehand;
+    prints M_CLK_CFG / WORD_LEN / TX_PACKING / GSI_EVENT_EN / DMA_MODE after it: 0x81 and word 4 => the GPI does program the
+    SE (GO-specific problem); unchanged => GPI commands never reach SE13.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
