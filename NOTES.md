@@ -190,7 +190,15 @@ Separate effort from sweet; sweet handoff below is unchanged.
     <gpi 0 5 1 0x40 2> (tx) / <gpi 1 5 1 0x40 2> (rx), and **iommus <apps_smmu 0x56>** (GPI) / 0x43 (qupv3_1 wrapper):
     check whether SID 0x56 translates or bypasses before any DMA. References: drivers/dma/qcom/msm_gpi.c (not yet fetched:
     the sparse path guess was wrong) and spi-msm-geni.c setup_gsi_xfer() (in spacewar-stock/nothing-kernel).
-    Next: read-only GPI + SMMU probe, then a polled shim GPI driver (TRE/EV rings, CONFIG0/GO/DMA TREs).
+    GPI/SMMU probe (c14b154, 18:46; first try 5fabdfa added the ee-offset and aborted at 0xa34000 = GPII 9): gpi.c uses
+    **ee_base = gpi-top - qcom,gpi-ee-offset** -> GPII n at 0x9f0000 + 0x20000 (ch ctx) + 0x4000*n; GPII 0 = 0xa10000
+    (= a DT trusted-touch io base). **GPII 1-4: all ch0/ch1/ev0 contexts and irq 0 (free, readable).**
+    **apps_smmu @0x15000000: sCR0 0x00220406 (enabled, GFRE/GFIE, USFCFG=1 -> unmatched streams fault), ID0 0x4C017E4B
+    (75 SMRs); no valid SMR matches SID 0x56 (GPI) or 0x43 (qupv3_1).** => GPI DMA would fault: needs an SMR (id 0x56,
+    mask 0) + S2CR bypass (or a translating context bank) before use. SMMU global writes under the Qualcomm hypervisor are
+    untested (may be filtered).
+    Next: (1) SMR/S2CR bypass for SID 0x56, verify by readback; (2) polled GPI driver on GPII 1 (TRE/EV rings, ALLOCATE/
+    START commands, CONFIG0/GO/DMA TREs per spi-msm-geni.c setup_gsi_xfer); (3) FT3680 boot id 0x5662.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
