@@ -46,7 +46,8 @@ Separate effort from sweet; sweet handoff below is unchanged.
   => (1) Spacewar timer PPIs are standard (DT <1 13>,<1 14>,<1 11>,<1 12>): **vtimer INTID 27, ptimer 30** (sweet: 19/18);
   INTID 18 is something else and fired once enabled. (2) **EL1 physical timer access UNDEFs** (hypervisor): XNU must
   use only the virtual timer (sweet already does; ADT needs INTID 27).
-  **Probe 6**: same with SPACEWAR timer INTIDs, ptimer not enabled, page 1 shortened to 5 s.
+  **Probe 6** (7750d70): UNDEF again, image at 0xA0080000 (+0x28B8) = `msr CNTP_CTL_EL0` after the vtimer window:
+  confirms *any* EL1 CNTP_* access UNDEFs. **Probe 7**: no CNTP access at all under SPACEWAR.
   Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
 - Next: (4) temp root (Magisk-patched boot via fastboot boot)
   to pull live FDT, /proc/iomem and partition backups (persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots).

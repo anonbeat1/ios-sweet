@@ -277,7 +277,9 @@ static void irq_window(const char *label, uintptr_t r, int src)
 		}
 	__asm__ volatile("msr daifset, #2" ::: "memory");
 	wsr("cntv_ctl_el0", 0);
+#ifndef SPACEWAR
 	wsr("cntp_ctl_el0", 0);
+#endif
 	isb();
 
 	con_hex2(label, "irqs=", irq_count, "other=", irq_other);
@@ -390,7 +392,7 @@ void shim_main(uint64_t dtb)
 	 */
 	stage = "page 1";
 	con_clear(RED);
-	con_str("SHIM", "spacewar probe 6, page 1/2");
+	con_str("SHIM", "spacewar probe 7, page 1/2");
 	con_hex2("DTB", "at=", dtb, "magic=", dtb ? __builtin_bswap32(rd32(dtb)) : 0);
 	con_hex2("MIDR", "cpu0=", rsr("midr_el1"), "el=", rsr("CurrentEL") >> 2);
 	con_hex2("CNTFRQ", "hz=", rsr("cntfrq_el0"), 0, 0);
@@ -435,7 +437,7 @@ void shim_main(uint64_t dtb)
 #ifndef SPACEWAR
 	con_str("SHIM", "sweet milestone 3");
 #else
-	con_str("SHIM", "spacewar probe 6, page 2/2");
+	con_str("SHIM", "spacewar probe 7, page 2/2");
 #endif
 	con_skip();
 	con_hex2("DTB", "at=", dtb, "magic=", dtb ? __builtin_bswap32(rd32(dtb)) : 0);
