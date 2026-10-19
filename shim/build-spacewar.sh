@@ -6,7 +6,7 @@ PATH=/opt/homebrew/opt/lld/bin:$PATH
 CC="clang --target=aarch64-none-elf"
 CFLAGS="-DSPACEWAR -O2 -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -mstrict-align -fno-stack-protector -fno-jump-tables -Wall -Wextra ${EXTRA_CFLAGS:-}"
 mkdir -p out/sw
-SRCS="start.S shim.c console.c mmu.c fdt.c loader.c ufs.c touchprobe.c rpmh.c ft_fw.S"
+SRCS="start.S shim.c console.c mmu.c fdt.c loader.c ufs.c touchprobe.c rpmh.c ft_fw.S cpufreq.c"
 # FT3680 firmware (Focaltech .i, C hex list) -> out/sw/ft_fw.bin; empty if absent
 FT_FW_I=${FT_FW_I:-$HOME/Desktop/esrever/spacewar-stock/nothing-kernel/drivers/input/touchscreen/focaltech_touch/include/firmware/FT3680_WXN_M146_V27_D01_20220706_app.i}
 python3 -I -c 'import re,sys; d=open(sys.argv[1]).read() if len(sys.argv)>1 else ""; open("out/sw/ft_fw.bin","wb").write(bytes(int(x,16) for x in re.findall(r"0x([0-9a-fA-F]{1,2})\b", d)))' $( [ -f "$FT_FW_I" ] && echo "$FT_FW_I" )

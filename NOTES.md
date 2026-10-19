@@ -349,6 +349,14 @@ Separate effort from sweet; sweet handoff below is unchanged.
     if dead, boot the diag image and read where SWEET FTS stops.
     **MILESTONE 2026-10-19 ~20:25: TOUCH WORKS IN iOS ON SPACEWAR** (user, `spacewar-xnu-0089-fast.img`): the lock screen /
     SpringBoard respond to touch. UI is very slow and laggy (software rendering, no GPU): next topic = smoothness.
+    Smoothness plan (no GPU path: Adreno has no iOS/Metal driver): (1) CPU frequency: our kernel never programs the EPSS
+    cpufreq-hw (live DT qcom,cpufreq-hw-epss, domains 0x18591000 A55 / 0x18592000 A78 / 0x18593000 prime; offsets
+    ENABLE 0x0, DOMAIN_STATE 0x20 [7:0] = current L, FREQ_LUT 0x100 rows of 4 B [31:30] src [7:0] L (MHz = L*19.2) [18:16]
+    cores, PERF_STATE 0x320 = requested index; end of LUT = repeated row) so cores stay at ABL's level; (2) DDR bandwidth
+    vote over RPMh; (3) SweetFramebuffer copies changed layers by CPU into the NC splash buffer at sweetfb_hz=30 ->
+    60 Hz, damage-only copy, or render straight into the scanout surface; (4) drop -enable_kprintf_spam / debug=0xc.
+    cpufreq1 probe (`shim/out/spacewar-cpufreq1.img`, `shim/cpufreq.c`, no payload): per domain enable|perf, current MHz,
+    LUT top index and lo|hi MHz; 50M-add loop time on cpu0, then PERF_STATE = top on all 3 domains, state + loop again.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON

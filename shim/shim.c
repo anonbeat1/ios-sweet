@@ -13,6 +13,7 @@
 #include "ufs.h"
 #ifdef SPACEWAR
 #include "touchprobe.h"
+#include "cpufreq.h"
 #endif
 
 #define IMEM_RESTART_REASON	0x146aa65cUL	/* qcom,msm-imem restart_reason@65c */
@@ -399,6 +400,11 @@ void shim_main(uint64_t dtb)
 	con_skip();
 	con_str("LOADER", loader_boot(dtb));	/* returns only without a payload */
 	con_skip();
+	stage = "cpufreq";
+	con_clear(BLUE);
+	cpufreq_probe();	/* EPSS levels + loop timing before/after max */
+	con_str("CPUFREQ", "done, touch probe in 60 s");
+	delay_ms(60000);
 	stage = "touch";
 	test_touch();	/* state ABL left (votes the SE13 clocks) */
 	touch_bringup();	/* rails, pins, GSI: SMMU cb + GPI, FT3680 boot id */
