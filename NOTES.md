@@ -203,6 +203,17 @@ Separate effort from sweet; sweet handoff below is unchanged.
     SCTLR, S2CR translate -> cbndx), like Linux arm-smmu. Note: SMR 8 stays valid (fault) until reboot.
     Next: (1) free context bank + identity-mapped S1 tables for a DMA buffer, S2CR translate for SID 0x56, verify; (2) polled GPI driver on GPII 1 (TRE/EV rings, ALLOCATE/
     START commands, CONFIG0/GO/DMA TREs per spi-msm-geni.c setup_gsi_xfer); (3) FT3680 boot id 0x5662.
+    **touch5 (2026-10-19 19:00, `shim/out/spacewar-touch5-gsi.img`, not booted yet)**: GSI path in `shim/touchprobe.c`:
+    smmu_setup() = first free stage-1 context bank (>= ID1 NUMS2CB, not referenced by a translating S2CR, SCTLR.M 0),
+    CBAR type 1 (S1 + S2 bypass; ID0 has no S2TS), 39-bit VA, 4K granule, level-1 1 GiB identity blocks for DRAM
+    0x80000000-0x27fffffff Normal NC, NC table walks; then S2CR translate -> cb and SMR 0x56 in the first free SMR, readback.
+    gpi_setup() = geni_se_select_gsi_mode on SE13, gpi_config_interrupts values, EV ALLOCATE + context, CH0 (TX) / CH1 (RX)
+    ALLOCATE + context (SCRATCH_0 pair/proto SPI/seid 5) + START, all polled on the context state field (no IRQ).
+    gsi_xfer() = RX DMA TRE, TX CONFIG0 (pack, mode 0, 8 bit, clk idx 0 div 4) + GO (full duplex, cs 0, link_rx, chain) +
+    DMA TRE (ieot); done when both channel RPs reach the WPs; on timeout prints ch ctx/RP, GPII irq/error log, GENI status
+    and SMMU cb FSR/FAR/FSYNR0. Then the old FT3680 boot-id loop (0x55, read 0x90 with CRC) runs over gsi_xfer.
+    Expected outcomes to look for on screen: "free cb=" accepted (sctlr bit0 = 1, s2cr type 0), GPII 1 ch0/ch1 state 2,
+    and "FT3680 boot id 0x5662". Failure lines name the step (EV ALLOC / CHn ALLOC / CHn START / transfer timeout).
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON

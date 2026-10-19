@@ -197,6 +197,15 @@ static uint16_t crc16_kermit(const uint8_t *d, unsigned len)
 	return crc;
 }
 
+static int touch_gsi_init(void);
+static int gsi_xfer(const uint8_t *tx, uint8_t *rx, unsigned n);
+static int use_gsi;
+
+static int ts_xfer(const uint8_t *tx, uint8_t *rx, unsigned n, int explicit_cs)
+{
+	return use_gsi ? gsi_xfer(tx, rx, n) : spi_xfer(tx, rx, n, explicit_cs);
+}
+
 void touch_bringup(void)
 {
 	con_str("TOUCH", "bring-up: rails, pins, SPI, FT3680 boot id");
@@ -256,8 +265,9 @@ void touch_bringup(void)
 		 * firmware itself is the same. Try that without reloading it.
 		 */
 		/* touch4: even reading SE+0x2004 is an external abort (XPU, TZ-owned). */
-		con_str("SE13", "GSI mode (FIFO switch is TZ-only): needs GPI DMA");
-		return;
+		con_str("SE13", "GSI mode (FIFO switch is TZ-only): GPI DMA");
+		if (touch_gsi_init())
+			return;
 	}
 
 	/* focaltech_flash.c fts_enter_into_boot: reset, 0x55, read boot id 0x90 */
@@ -269,12 +279,12 @@ void touch_bringup(void)
 		static const uint8_t start1[4] = { 0x55, 0x00, 0x00, 0x00 };
 		uint8_t rx[16] = { 0 };
 		int cs = i == 2;
-		int rc = spi_xfer(start1, rx, sizeof(start1), cs);
+		int rc = ts_xfer(start1, rx, sizeof(start1), cs);
 		uint32_t irq1 = dbg_irq, st1 = dbg_status;
 		udelay(8000);
 		static const uint8_t rid[11] = { 0x90, 0xa0, 0x00, 0x02 };
 		uint8_t id[11] = { 0 };
-		int rc2 = spi_xfer(rid, id, sizeof(rid), cs);
+		int rc2 = ts_xfer(rid, id, sizeof(rid), cs);
 		uint16_t crc = crc16_kermit(&id[7], 2), got = (uint16_t)(id[10] << 8 | id[9]);
 		con_hex2(cs ? "55 csx" : "55 auto", "rc=", (uint32_t)rc, "st=", rx[3]);
 		con_hex2(" geni", "irq=", irq1, "status=", st1);
@@ -289,69 +299,272 @@ void touch_bringup(void)
 	con_str("FT3680", "no valid boot id");
 }
 
-/* ---- GPI DMA + SMMU state (read-only) ---- */
+/* ---- GSI path: apps_smmu context bank + polled GPI DMA (GPII 1) ---- */
 
 /*
- * gpi.c: ee_base = gpi-top - qcom,gpi-ee-offset (subtracted). GPII 0 then
- * sits at 0xa10000, one of the DT trusted-touch-io-bases (LE VM). The first
- * probe added the offset and hit GPII 9 (external abort at 0xa34000).
+ * SE13 runs GSI firmware and TZ owns its FIFO switch, so transfers go through
+ * gpi_dma1. Its stream (SID 0x56) faults by default and the hypervisor turns
+ * an S2CR bypass into fault (a6d4d5a), so give it a stage-1 context bank with
+ * an identity map of DRAM, as Linux arm-smmu does. ID0 shows no stage 2
+ * (S1TS only): the hypervisor's own stage 2 sits behind it.
+ * GPI programming follows gpi.c (gpi_config MSM_GPI_INIT, polled instead of
+ * the IRQ), TREs follow spi-msm-geni.c setup_gsi_xfer.
  */
-#define GPI_EE		(0x00a00000UL - 0x10000UL)
 #define SMMU		0x15000000UL			/* apps_smmu */
+#define GPI_SID		0x56
+#define GPI_EE		(0x00a00000UL - 0x10000UL)	/* gpi-top - ee-offset */
+#define GPII		1UL				/* first of qcom,gpii-mask 0x1e */
+#define G(o)		(GPI_EE + (o) + 0x4000UL * GPII)
+#define CH_CTX(k)	G(0x20000 + 0x80 * (k))
+#define CH_DB(k)	G(0x22000 + 0x8 * (k))
+#define EV_CTX		G(0x21000)
+#define EV_DB		G(0x22100)
+#define SE_SEID		5				/* SE13 = wrapper 1 SE5 */
+#define NTRE		64				/* dmas <... 0x40 ...> */
 
-void gpi_smmu_probe(void)
+struct tre { uint32_t d[4]; };
+
+static struct tre tx_ring[NTRE] __attribute__((aligned(NTRE * 16)));
+static struct tre rx_ring[NTRE] __attribute__((aligned(NTRE * 16)));
+static struct tre ev_ring[NTRE] __attribute__((aligned(NTRE * 16)));
+static uint8_t dma_tx[64] __attribute__((aligned(64))), dma_rx[64] __attribute__((aligned(64)));
+static uint64_t smmu_l1[512] __attribute__((aligned(4096)));
+static unsigned tx_wp, rx_wp, ev_rp, gsi_cfg_done;
+static int smmu_cb = -1;
+static uintptr_t smmu_cbase;
+
+/* GPI is not cache coherent (no dma-coherent in its node): clean / invalidate by line */
+static void dc_civac(const void *p, unsigned len)
 {
-	con_str("GPI", "probe (read-only): gpi_dma1 GPII 1-4, apps_smmu");
-	/* GPII 0 is static/LE-VM (qcom,static-gpii-mask 1): not touched */
-	for (unsigned n = 1; n <= 4; n++) {
-		uintptr_t g = GPI_EE + 0x4000UL * n;
-		char l[] = "GPII n";
-		l[5] = '0' + n;
-		/* CH_k_CNTXT_0 [23:20] state, [3:0] protocol; EV_k_CNTXT_0 [23:20] state */
-		con_hex2(l, "ch0=", rd(g + 0x20000), "ch1=", rd(g + 0x20080));
-		con_hex2(" ev0", "ctx=", rd(g + 0x21000), "irq=", rd(g + 0x23080));
-	}
-	uint32_t scr0 = rd(SMMU), id0 = rd(SMMU + 0x20);
-	unsigned nsmr = id0 & 0xff;
-	con_hex2("SMMU", "scr0=", scr0, "id0=", id0);
-	static const uint16_t sids[2] = { 0x56, 0x43 };	/* GPI, qupv3_1 wrapper */
-	for (int j = 0; j < 2; j++) {
-		int hits = 0;
-		for (unsigned i = 0; i < nsmr && i < 256; i++) {
-			uint32_t smr = rd(SMMU + 0x800 + 4 * i);
-			uint32_t id = smr & 0xffff, mask = (smr >> 16) & 0x7fff;
-			if (!(smr & (1u << 31)) || ((id ^ sids[j]) & ~mask & 0x7fff))
-				continue;
-			char l[] = "SID xx";
-			l[4] = "0123456789abcdef"[sids[j] >> 4], l[5] = "0123456789abcdef"[sids[j] & 15];
-			/* S2CR [17:16] type: 0 translate, 1 bypass, 2 fault; [7:0] cbndx */
-			con_hex2(l, "smr=", smr, "s2cr=", rd(SMMU + 0xc00 + 4 * i));
-			hits++;
-		}
-		if (!hits) {
-			char l[] = "SID xx";
-			l[4] = "0123456789abcdef"[sids[j] >> 4], l[5] = "0123456789abcdef"[sids[j] & 15];
-			con_hex2(l, "no SMR, usfcfg=", (scr0 >> 10) & 1, 0, 0);
-		}
-	}
-
-	/*
-	 * USFCFG=1 faults SID 0x56 (GPI). Map it to bypass in a free stream
-	 * match group, arm-smmu.c order: S2CR first, then the valid SMR.
-	 * Under the Qualcomm hypervisor these writes may be emulated or refused.
-	 */
-	int free_i = -1;
-	for (unsigned i = 0; i < nsmr && i < 256 && free_i < 0; i++)
-		if (!(rd(SMMU + 0x800 + 4 * i) & (1u << 31)))
-			free_i = (int)i;
-	if (free_i < 0) {
-		con_str("SMMU", "no free SMR");
-		return;
-	}
-	uintptr_t s2cr = SMMU + 0xc00 + 4 * (unsigned)free_i, smr = SMMU + 0x800 + 4 * (unsigned)free_i;
-	con_hex2("SMMU", "free smr=", (uint32_t)free_i, "old s2cr=", rd(s2cr));
-	wr(s2cr, 1u << 16);			/* S2CR TYPE = bypass */
-	wr(smr, 1u << 31 | 0x56);		/* SMR VALID, mask 0, id 0x56 */
+	for (uintptr_t a = (uintptr_t)p & ~63UL; a < (uintptr_t)p + len; a += 64)
+		__asm__ volatile("dc civac, %0" :: "r"(a) : "memory");
 	__asm__ volatile("dsb sy" ::: "memory");
-	con_hex2("SMMU", "smr now=", rd(smr), "s2cr now=", rd(s2cr));
+}
+
+static inline void wr64(uintptr_t a, uint64_t v) { *(volatile uint64_t *)a = v; }
+
+static int smmu_setup(void)
+{
+	uint32_t id0 = rd(SMMU + 0x20), id1 = rd(SMMU + 0x24);
+	unsigned pgshift = (id1 >> 31) ? 16 : 12, ncb = id1 & 0xff, ns2cb = (id1 >> 16) & 0xff;
+	unsigned nsmr = id0 & 0xff;
+	uintptr_t gr1 = SMMU + (1UL << pgshift);
+	smmu_cbase = SMMU + ((1UL << (((id1 >> 28) & 7) + 1)) << pgshift);
+	con_hex2("SMMU", "id1=", id1, "cb0=", (uint32_t)smmu_cbase);
+
+	/* context banks in use by a valid translating stream match group */
+	uint32_t used[8] = { 0 };
+	int free_smr = -1;
+	for (unsigned i = 0; i < nsmr && i < 128; i++) {
+		uint32_t smr = rd(SMMU + 0x800 + 4 * i), s2cr = rd(SMMU + 0xc00 + 4 * i);
+		if (!(smr & (1u << 31))) {
+			if (free_smr < 0)
+				free_smr = (int)i;
+			continue;
+		}
+		if (((s2cr >> 16) & 3) == 0)
+			used[(s2cr & 0xff) / 32] |= 1u << ((s2cr & 0xff) % 32);
+	}
+	for (unsigned c = ns2cb; c < ncb && smmu_cb < 0; c++)
+		if (!(used[c / 32] & (1u << (c % 32))) && !(rd(smmu_cbase + ((uintptr_t)c << pgshift)) & 1))
+			smmu_cb = (int)c;
+	con_hex2("SMMU", "free cb=", (uint32_t)smmu_cb, "free smr=", (uint32_t)free_smr);
+	if (smmu_cb < 0 || free_smr < 0)
+		return -1;
+
+	/* 39-bit VA, 4K granule, level-1 1 GiB blocks: DRAM 0x80000000-0x27fffffff, Normal NC, RW */
+	for (unsigned i = 2; i < 10; i++)
+		smmu_l1[i] = (uint64_t)i << 30 | 1u << 10 | 2u << 8 | 1u << 6 | 0u << 2 | 1;
+	dc_civac(smmu_l1, sizeof(smmu_l1));
+
+	uintptr_t cb = smmu_cbase + ((uintptr_t)smmu_cb << pgshift);
+	unsigned asid = (unsigned)smmu_cb;
+	wr(cb + 0x0, 0);					/* SCTLR off while programming */
+	wr(cb + 0x58, 0xffffffffu);				/* FSR clear */
+	wr(gr1 + 0x800 + 4 * (unsigned)smmu_cb, 1);		/* CBA2R VA64 */
+	wr(gr1 + 4 * (unsigned)smmu_cb, 1u << 16 | 0xfu << 12 | 3u << 8);	/* CBAR S1 + S2 bypass, WB, NSH */
+	wr(cb + 0x10, 7u << 15 | 2);				/* TCR2: SEP upstream, PASize 40 bit */
+	wr(cb + 0x30, 25 | 1u << 23);				/* TCR: T0SZ 25, TG0 4K, NC walks, EPD1 */
+	wr(cb + 0x34, asid);					/* CONTEXTIDR */
+	wr64(cb + 0x20, (uintptr_t)smmu_l1 | (uint64_t)asid << 48);
+	wr64(cb + 0x28, 0);
+	wr(cb + 0x38, 0x44);					/* MAIR0 attr0 Normal NC */
+	wr(cb + 0x618, 0);					/* TLBIALL */
+	wr(cb + 0x7f0, 0);					/* TLBSYNC */
+	for (int t = 0; t < 100000 && (rd(cb + 0x7f4) & 1); t++)
+		udelay(1);
+	wr(cb + 0x0, 1u << 6 | 1u << 5 | 1u << 2 | 1u << 1 | 1);	/* CFIE CFRE AFE TRE M */
+	uintptr_t s2cr = SMMU + 0xc00 + 4 * (unsigned)free_smr, smr = SMMU + 0x800 + 4 * (unsigned)free_smr;
+	wr(s2cr, (uint32_t)smmu_cb);				/* TYPE translate, cbndx */
+	wr(smr, 1u << 31 | GPI_SID);
+	__asm__ volatile("dsb sy" ::: "memory");
+	con_hex2(" cb", "sctlr=", rd(cb), "cbar=", rd(gr1 + 4 * (unsigned)smmu_cb));
+	con_hex2(" cb", "tcr=", rd(cb + 0x30), "ttbr0=", rd(cb + 0x20));
+	con_hex2(" sid56", "smr=", rd(smr), "s2cr=", rd(s2cr));
+	return ((rd(s2cr) >> 16) & 3) == 0 && (rd(s2cr) & 0xff) == (uint32_t)smmu_cb && (rd(cb) & 1) ? 0 : -1;
+}
+
+static void smmu_fault_report(void)
+{
+	if (smmu_cb < 0)
+		return;
+	uint32_t id1 = rd(SMMU + 0x24);
+	uintptr_t cb = smmu_cbase + ((uintptr_t)smmu_cb << ((id1 >> 31) ? 16 : 12));
+	con_hex2(" cb", "fsr=", rd(cb + 0x58), "far=", rd(cb + 0x60));
+	con_hex2(" cb", "fsynr0=", rd(cb + 0x68), "gfsr=", rd(SMMU + 0x48));
+}
+
+/* gpi_send_cmd, polled: wait for the context state field [23:20] */
+static int gpi_cmd(uintptr_t reg, uint32_t cmd, uintptr_t ctx, uint32_t state, const char *what)
+{
+	wr(reg, cmd);
+	for (int t = 0; t < 250000; t++) {
+		if (((rd(ctx) >> 20) & 0xf) == state) {
+			wr(G(0x230a0), rd(G(0x23090)));		/* SRC_CH_IRQ_CLR */
+			wr(G(0x230a4), rd(G(0x23094)));		/* SRC_EV_CH_IRQ_CLR */
+			return 0;
+		}
+		udelay(1);
+	}
+	con_hex2(what, "ctx=", rd(ctx), "irq=", rd(G(0x23080)));
+	con_hex2(" gpii", "glob=", rd(G(0x23100)), "err=", rd(G(0x23200)));
+	return -1;
+}
+
+static int gpi_setup(void)
+{
+	/* geni_se_select_gsi_mode (msm-geni-se.c) */
+	wr(SE(0xe1c), 0);					/* SE_IRQ_EN */
+	wr(SE(0x644), rd(SE(0x644)) & ~1u);			/* S_IRQ_EN: S_CMD_DONE off */
+	wr(SE(0x614), rd(SE(0x614)) & ~(1u | 1u << 26 | 1u << 27 | 1u << 30));
+	wr(SE(0x618), 0xffffffffu), wr(SE(0x648), 0xffffffffu);
+	wr(SE(0xc44), 0xffffffffu), wr(SE(0xd44), 0xffffffffu);
+	wr(SE(0x258), rd(SE(0x258)) | 1);			/* GENI_DMA_MODE_EN */
+	wr(SE(0xe18), rd(SE(0xe18)) | 0xf);			/* GSI_EVENT_EN: DMA rx/tx, M, S */
+
+	/* gpi_config_interrupts DEFAULT_IRQ_SETTINGS (nothing wired to the GIC: we poll) */
+	wr(G(0x23088), 0x4f), wr(G(0x230b8), 1), wr(G(0x23098), 3), wr(G(0x2309c), 1);
+	wr(G(0x23108), 1), wr(G(0x23120), 0xf);
+	wr(G(0x23188), 0), wr(G(0x2318c), 0), wr(G(0x23400), 0), wr(G(0x23404), 0);
+	wr(G(0x23180), 1), wr(G(0x23200), 0);
+
+	for (unsigned i = 0; i < NTRE; i++)
+		tx_ring[i] = rx_ring[i] = ev_ring[i] = (struct tre){ { 0 } };
+	dc_civac(tx_ring, sizeof(tx_ring)), dc_civac(rx_ring, sizeof(rx_ring)), dc_civac(ev_ring, sizeof(ev_ring));
+
+	/* gpi_alloc_ev_chan: ALLOCATE, then program the context */
+	if (gpi_cmd(G(0x23010), 0, EV_CTX, 1, "EV ALLOC"))
+		return -1;
+	wr(EV_CTX + 0x0, 16u << 24 | 1u << 16 | 2);		/* el 16, IRQ, GPI_EV */
+	wr(EV_CTX + 0x4, sizeof(ev_ring));
+	wr(EV_CTX + 0x8, (uint32_t)(uintptr_t)ev_ring), wr(EV_CTX + 0xc, (uint32_t)((uintptr_t)ev_ring >> 32));
+	wr(EV_DB + 0x4, (uint32_t)((uintptr_t)ev_ring >> 32));
+	wr(EV_CTX + 0x20, 0), wr(EV_CTX + 0x28, 0), wr(EV_CTX + 0x2c, 0);
+	wr(EV_CTX + 0x30, 0), wr(EV_CTX + 0x34, 0);
+	__asm__ volatile("dsb sy" ::: "memory");
+	wr(EV_DB, (uint32_t)(uintptr_t)&ev_ring[NTRE - 1]);	/* hand all but one element to HW */
+
+	/* gpi_alloc_chan x2: ch0 TX (dir out), ch1 RX (dir in), SPI on SE5 */
+	struct tre *rings[2] = { tx_ring, rx_ring };
+	for (unsigned k = 0; k < 2; k++) {
+		if (gpi_cmd(G(0x23008), k, CH_CTX(k), 1, k ? "CH1 ALLOC" : "CH0 ALLOC"))
+			return -1;
+		uintptr_t r = (uintptr_t)rings[k];
+		wr(CH_CTX(k) + 0x0, 16u << 24 | (k ? 0u : 1u) << 3 | 2);
+		wr(CH_CTX(k) + 0x4, NTRE * 16);
+		wr(CH_CTX(k) + 0x8, (uint32_t)r), wr(CH_CTX(k) + 0xc, (uint32_t)(r >> 32));
+		wr(CH_DB(k) + 0x4, (uint32_t)(r >> 32));
+		wr(CH_CTX(k) + 0x60, (k ? 0u : 1u) << 16 | 1u << 4 | SE_SEID);	/* SCRATCH_0 pair, proto SPI */
+		wr(CH_CTX(k) + 0x64, 0), wr(CH_CTX(k) + 0x68, 0), wr(CH_CTX(k) + 0x6c, 0);
+		wr(CH_CTX(k) + 0x5c, 1);				/* QOS */
+	}
+	__asm__ volatile("dsb sy" ::: "memory");
+	for (unsigned k = 0; k < 2; k++)
+		if (gpi_cmd(G(0x23008), 1u << 24 | k, CH_CTX(k), 2, k ? "CH1 START" : "CH0 START"))
+			return -1;
+	con_hex2("GPII 1", "ch0=", rd(CH_CTX(0)), "ch1=", rd(CH_CTX(1)));
+	con_hex2(" ev", "ctx=", rd(EV_CTX), "rp=", rd(EV_CTX + 0x10));
+	return 0;
+}
+
+static void ring_put(struct tre *ring, unsigned *wp, uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3)
+{
+	ring[*wp] = (struct tre){ { d0, d1, d2, d3 } };
+	dc_civac(&ring[*wp], 16);
+	*wp = (*wp + 1) % NTRE;
+}
+
+/*
+ * One full-duplex SPI transfer (<= 64 bytes): TX ring CONFIG0 (first time),
+ * GO, DMA tx; RX ring DMA rx. Done when the RX channel's read pointer
+ * reaches its write pointer. Event ring printed on failure.
+ */
+static uint32_t gsi_dbg[4];
+
+static int gsi_xfer(const uint8_t *tx, uint8_t *rx, unsigned n)
+{
+	for (unsigned i = 0; i < n; i++)
+		dma_tx[i] = tx[i], dma_rx[i] = 0xee;
+	dc_civac(dma_tx, sizeof(dma_tx)), dc_civac(dma_rx, sizeof(dma_rx));
+
+	ring_put(rx_ring, &rx_wp, (uint32_t)(uintptr_t)dma_rx, 0, n, 1u << 20);	/* DMA_W_BUF */
+	if (!gsi_cfg_done) {
+		/* CONFIG0: tx/rx pack, mode 0, 8-bit words; clk idx 0 (XO 19.2 MHz) / 4 = 4.8 MHz; chain */
+		ring_put(tx_ring, &tx_wp, 3u << 24 | (8 - 4), 0, 0u << 16 | 4, 2u << 20 | 2u << 16 | 1);
+		gsi_cfg_done = 1;
+	}
+	ring_put(tx_ring, &tx_wp, 3, 0, n, 2u << 20 | 1u << 11 | 1);	/* GO full duplex, cs 0, link_rx, chain */
+	ring_put(tx_ring, &tx_wp, (uint32_t)(uintptr_t)dma_tx, 0, n, 1u << 20 | 1u << 9);	/* DMA_W_BUF, ieot */
+	wr(CH_DB(1), (uint32_t)(uintptr_t)&rx_ring[rx_wp]);
+	wr(CH_DB(0), (uint32_t)(uintptr_t)&tx_ring[tx_wp]);
+
+	uint32_t want = (uint32_t)(uintptr_t)&rx_ring[rx_wp];
+	int rc = -1;
+	for (int t = 0; t < 100000; t++) {
+		if (rd(CH_CTX(1) + 0x10) == want && rd(CH_CTX(0) + 0x10) == (uint32_t)(uintptr_t)&tx_ring[tx_wp]) {
+			rc = 0;
+			break;
+		}
+		udelay(1);
+	}
+	udelay(150);						/* focaltech CS_HIGH_DELAY */
+	dc_civac(dma_rx, sizeof(dma_rx));
+	for (unsigned i = 0; i < n; i++)
+		rx[i] = dma_rx[i];
+
+	/* consume events (xfer completions), remember the last one */
+	dc_civac(ev_ring, sizeof(ev_ring));
+	uint32_t hw_rp = rd(EV_CTX + 0x10);
+	while ((uint32_t)(uintptr_t)&ev_ring[ev_rp] != hw_rp && ev_rp < NTRE - 1) {
+		for (int j = 0; j < 4; j++)
+			gsi_dbg[j] = ev_ring[ev_rp].d[j];
+		ev_rp++;
+	}
+	if (rc) {
+		con_hex2(" ch0", "ctx=", rd(CH_CTX(0)), "rp=", rd(CH_CTX(0) + 0x10));
+		con_hex2(" ch1", "ctx=", rd(CH_CTX(1)), "rp=", rd(CH_CTX(1) + 0x10));
+		con_hex2(" gpii", "irq=", rd(G(0x23080)), "err=", rd(G(0x23200)));
+		con_hex2(" se13", "geni=", rd(SE(0x40)), "m_irq=", rd(SE(0x610)));
+		smmu_fault_report();
+	}
+	con_hex2(" ev", "d2=", gsi_dbg[2], "d3=", gsi_dbg[3]);
+	return rc;
+}
+
+/* Returns 0 when transfers can go through the GPI. */
+static int touch_gsi_init(void)
+{
+	con_clear(BLUE);
+	con_str("TOUCH", "GSI path: SMMU cb + GPI DMA, GPII 1");
+	if (smmu_setup()) {
+		con_str("SMMU", "context bank not accepted: stop");
+		return -1;
+	}
+	if (gpi_setup()) {
+		con_str("GPI", "channel setup failed: stop");
+		smmu_fault_report();
+		return -1;
+	}
+	use_gsi = 1;
+	return 0;
 }
