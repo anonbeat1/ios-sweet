@@ -580,6 +580,41 @@ static int gsi_xfer(const uint8_t *tx, uint8_t *rx, unsigned n)
  * ends in CrashDump. Split it: a NOP TRE (GPI fetch + event write, no SE),
  * then CONFIG0 alone (SE programming, no bus traffic), each with IEOB.
  */
+static uint64_t ticks(void)
+{
+	uint64_t t;
+	__asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(t));
+	return t;
+}
+
+/*
+ * touch8 t1: the TX-only GO resets the SoC within 2 s with nothing on
+ * screen. Poll the GPI/SE state and print a line (time in us since the
+ * doorbell) whenever it changes, to see how far the transfer gets.
+ */
+static void gsi_trace(unsigned us)
+{
+	uint32_t last[6] = { ~0u, ~0u, ~0u, ~0u, ~0u, ~0u };
+	uint64_t t0 = ticks(), end = t0 + 192ULL * us / 10;
+	int lines = 0;
+	while (ticks() < end && lines < 14) {
+		uint32_t v[6] = {
+			rd(CH_CTX(0) + 0x10), rd(EV_CTX + 0x10), rd(G(0x23080)) << 16 | rd(G(0x23118)),
+			rd(SE(0x40)), rd(SE(0x610)), rd(SE(0xc40)),
+		};
+		int changed = 0;
+		for (int i = 0; i < 6; i++)
+			changed |= v[i] != last[i], last[i] = v[i];
+		if (changed) {
+			uint32_t dt = (uint32_t)((ticks() - t0) * 10 / 192);
+			con_hex2(" t us", "", dt, "rp=", v[0]);
+			con_hex2("", "ev=", v[1], "ir|gn=", v[2]);
+			con_hex2("", "geni=", v[3], "m_irq=", v[4]);
+			lines++;
+		}
+	}
+}
+
 static void gsi_step(const char *what, unsigned n, const struct tre *t)
 {
 	con_str(what, "TX doorbell in 3 s");
@@ -587,7 +622,10 @@ static void gsi_step(const char *what, unsigned n, const struct tre *t)
 	for (unsigned i = 0; i < n; i++)
 		ring_put(tx_ring, &tx_wp, t[i].d[0], t[i].d[1], t[i].d[2], t[i].d[3]);
 	wr(CH_DB(0), (uint32_t)(uintptr_t)&tx_ring[tx_wp]);
-	udelay(2000000);
+	if (n > 1)
+		gsi_trace(2000000);	/* the GO steps only: screen space */
+	else
+		udelay(2000000);
 	dc_civac(ev_ring, sizeof(ev_ring));
 	while ((uint32_t)(uintptr_t)&ev_ring[ev_rp] != rd(EV_CTX + 0x10) && ev_rp < NTRE - 1)
 		ev_rp++;
@@ -621,6 +659,9 @@ static void gsi_tests(void)
 #if TOUCH_TEST == 1
 	const struct tre c0[1] = { TRE_CONFIG0(0) };
 	gsi_step("CONFIG0", 1, c0);
+	/* RCG DFS (clk-rcg2.c: CMD_DFSR +0x14, PERF_DFSR(0) +0x1c) and what CONFIG0 left in the SE */
+	con_hex2("S5 RCG", "dfsr=", rd(GCC + 0x18600 + 0x14), "perf0=", rd(GCC + 0x18600 + 0x1c));
+	con_hex2("SE13", "clk_sel=", rd(SE(0x7c)), "m_clk=", rd(SE(0x48)));
 	const struct tre go[2] = { TRE_GO_TX(4), TRE_DMA_TX(4) };
 	gsi_step("GO+DMA", 2, go);
 #else

@@ -237,6 +237,13 @@ Separate effort from sweet; sweet handoff below is unchanged.
     touch8 (one experiment per image, `EXTRA_CFLAGS=-DTOUCH_TEST=n shim/build-spacewar.sh`, compact dumps, FT reset then a
     TX-only 0x55 write, no RX channel use): `shim/out/spacewar-touch8-t1.img` = CONFIG0 alone, then GO(TX_ONLY)+DMA;
     `shim/out/spacewar-touch8-t2.img` = CONFIG0+GO+DMA chained (Linux order). Dumps show m_cmd0 and SE DMA TX irq too.
+    **touch8 t1 result (19:12, photo)**: NOP and standalone CONFIG0 complete (EOB events) as in touch7; last line "GO+DMA TX
+    doorbell in 3 s", then reset (CrashDump presumably; "TOUCH test done" never shown) => **a TX-only GO that executes
+    resets the SoC within 2 s** (touch7's full-duplex GO only stalled, probably waiting on the linked RX side). The CPU only
+    spins on CNTPCT in that window, so the reset is asynchronous (TZ/hyp/NoC/watchdog), not a CPU fault. t2 not run.
+    touch9 (`shim/out/spacewar-touch9-trace.img`, TOUCH_TEST 1): prints S5 RCG DFSR/PERF0 and SE CLK_SEL/M_CLK_CFG after
+    CONFIG0, then after the GO doorbell prints a line (us since doorbell, ch0 rp, ev rp, GPII irq|gen, GENI status, M_IRQ)
+    on every change, max 14 entries.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
