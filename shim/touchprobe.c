@@ -7,6 +7,9 @@
  * every clock on their path is on: an unclocked access would hang the bus.
  * Probe 2 (the only writes): vote SE13 + wrapper-1 AHB clocks on in the APCS
  * branch vote register, as Linux does. No rail, pin or SE programming.
+ * The AHB branches are hardware clock gated (CBCR HW_CTL, bit 1): they read
+ * CLK_OFF while idle and Linux skips their halt check, so only the SE and
+ * core clocks gate the SE register reads (probe 2 showed sahb 0x8000000A).
  */
 #include <stdint.h>
 #include "console.h"
@@ -22,20 +25,20 @@ static inline void wr(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
 
 void test_touch(void)
 {
-	/* name, CBCR offset, vote bit */
-	static const struct { char name[8]; uint32_t cbcr, bit; } clk[5] = {
-		{ "se13", 0x185fc, 27 }, { "w1 mahb", 0x18004, 20 }, { "w1 sahb", 0x18008, 21 },
-		{ "w1 core", 0x23138, 19 }, { "w1 c2x", 0x23140, 18 },
+	/* name, CBCR offset, vote bit, hardware gated */
+	static const struct { char name[8]; uint32_t cbcr, bit, hwcg; } clk[5] = {
+		{ "se13", 0x185fc, 27, 0 }, { "w1 mahb", 0x18004, 20, 1 }, { "w1 sahb", 0x18008, 21, 1 },
+		{ "w1 core", 0x23138, 19, 0 }, { "w1 c2x", 0x23140, 18, 0 },
 	};
 	uint32_t vote = rd(GCC + GCC_VOTE);
 	int all_on = 1;
 
-	con_str("TOUCH", "probe 2 (clock vote only), FT3680 on SE13");
+	con_str("TOUCH", "probe 3 (clock vote only), FT3680 on SE13");
 	con_hex2("GCC", "vote=", vote, 0, 0);
 	for (int i = 0; i < 5; i++) {
 		uint32_t cbcr = rd(GCC + clk[i].cbcr);
 		con_hex2(clk[i].name, "cbcr=", cbcr, "voted=", (vote >> clk[i].bit) & 1);
-		if (cbcr & (1U << 31))
+		if ((cbcr & (1U << 31)) && !clk[i].hwcg)
 			all_on = 0;
 	}
 	/* SPI pins 52-55 (trusted-touch io bases), irq 81, reset 105 */
@@ -45,15 +48,15 @@ void test_touch(void)
 		l[4] = '0' + pins[i] / 100, l[5] = '0' + pins[i] / 10 % 10, l[6] = '0' + pins[i] % 10;
 		con_hex2(l, "ctl=", rd(TLMM_GPIO(pins[i])), "io=", rd(TLMM_GPIO(pins[i]) + 4));
 	}
-	if (!all_on) {
+	if (!all_on || !((vote >> 20) & (vote >> 21) & 1)) {
 		wr(GCC + GCC_VOTE, vote | 1U << 27 | 1U << 21 | 1U << 20);
 		__asm__ volatile("dsb sy" ::: "memory");
 		all_on = 1;
 		for (int i = 0; i < 5; i++) {
 			uint32_t cbcr = 0;
-			for (int t = 0; t < 100000 && ((cbcr = rd(GCC + clk[i].cbcr)) & (1U << 31)); t++)
+			for (int t = 0; t < 100000 && !clk[i].hwcg && ((cbcr = rd(GCC + clk[i].cbcr)) & (1U << 31)); t++)
 				;
-			if (cbcr & (1U << 31))
+			if ((cbcr & (1U << 31)) && !clk[i].hwcg)
 				all_on = 0;
 		}
 		con_hex2("VOTED", "vote=", rd(GCC + GCC_VOTE), "all_on=", all_on);
