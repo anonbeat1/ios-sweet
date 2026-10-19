@@ -302,6 +302,19 @@ Separate effort from sweet; sweet handoff below is unchanged.
     = unidentified-stream global fault (USFCFG=1), fatal under the hypervisor. touch17
     (`shim/out/spacewar-touch17-sid43.img`, TOUCH_TEST 2 = chained CONFIG0+GO+DMA on GPII 0): SID 0x43 also mapped to cb7
     (next free SMR), then boot-id read and a 3 min heartbeat.
+    **MILESTONE touch17 (2026-10-19 ~19:46, photos): FT3680 BOOT ID 0x5662 OVER SPI/GPI, CRC OK.** With SID 0x43 (qupv3_1
+    wrapper) mapped to cb7 as well (SMR 0x80000043, S2CR 0x7 accepted) the GO executes and no CrashDump: chained
+    CONFIG0+GO(TX 0x55)+DMA -> ch0 RP reached WP 0xA00B2C40, EOT event d2 0x02000004 (code 2 EOT, 4 bytes) d3 0x00220003,
+    M_CMD0 0x08000000, M_IRQ 1 (CMD_DONE); then full-duplex read 0x90: rc 0, status byte 0x03, id 0x5662, CRC ok (event d2
+    0x0200000B = 11 bytes). Heartbeat after the GO running (t=010s ok).
+    => **Cause of all CrashDumps: SPI data traffic uses the wrapper stream SID 0x43; with no SMR it is an unidentified stream
+    (USFCFG=1) and the hypervisor resets the SoC.** Map both 0x56 (GPI rings/events) and 0x43 to the translating cb.
+    Also: a standalone CONFIG0 (IEOB, no chain) blocks every later TRE except NOP: always chain CONFIG0 into the GO (Linux).
+    Working recipe (shim/touchprobe.c, TOUCH_TEST 2): rails ldoc8 1.8 V + ldoc3 3.3 V, pins qup15, SE13 clocks, FIFO-style SE
+    init then geni_se_select_gsi_mode, SMMU cb (first free S1 bank, identity 1 GiB blocks NC) for SIDs 0x56 + 0x43, static
+    GPII 0 (dmas cell 2 = STATIC_GPII), EV + CH0/CH1 ALLOCATE/START polled, TREs per spi-msm-geni.c, events recycled.
+    Next: (1) firmware download (fts_fw_download: 119284-byte FT3680 app .i, pram write + ECC, start) and read chip id /
+    touch reports via gpio81 polling; (2) port to XNU (sweet_touch for Spacewar: SMMU + GPI + FT3680 -> sweet_hid_touch).
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
