@@ -1,0 +1,214 @@
+diff --git a/bsd/dev/sweet_keys.c b/bsd/dev/sweet_keys.c
+index a148608..aef2933 100644
+--- a/bsd/dev/sweet_keys.c
++++ b/bsd/dev/sweet_keys.c
+@@ -12,6 +12,7 @@
+ #include <kern/sched_prim.h>
+ #include <machine/machine_routines.h>
+ #include <pexpert/pexpert.h>
++#include <pexpert/device_tree.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ extern void sweet_hid_key(int key, int down);
+@@ -20,10 +21,40 @@ void sweet_keys_init(void);
+ #define KEYS_CORE_PA     0x0c440000u
+ #define KEYS_OBS_PA      0x0e600000u
+ #define KEYS_CNFG_PA     0x0c40a000u
+-#define KEYS_PON_RT      0x0810u
+-#define KEYS_GPIO_RT     0xc110u
+ #define KEYS_NO_APID     0xffffu
+ 
++/*
++ * Key sources. sweet defaults; ADT /sweet-keys overrides them (Spacewar:
++ * PMK8350 PON gen3 0x1310 KPDPWR bit 7 / RESIN bit 6, volume-up PM7325 GPIO6).
++ */
++static uint32_t keys_pon_ppid = 0x008, keys_pon_rt = 0x0810;
++static uint32_t keys_pwr_mask = 0x01, keys_down_mask = 0x02;
++static uint32_t keys_gpio_ppid = 0x4c1, keys_gpio_base = 0xc100;
++
++static void
++keys_adt(void)
++{
++	DTEntry node;
++	if (SecureDTLookupEntry(NULL, "/sweet-keys", &node) != kSuccess) {
++		return;
++	}
++	static const char *const names[6] = {
++		"pon-ppid", "pon-rt", "pwr-mask", "down-mask", "gpio-ppid", "gpio-base",
++	};
++	uint32_t *const vals[6] = {
++		&keys_pon_ppid, &keys_pon_rt, &keys_pwr_mask, &keys_down_mask,
++		&keys_gpio_ppid, &keys_gpio_base,
++	};
++	for (int i = 0; i < 6; i++) {
++		const uint32_t *v;
++		unsigned int size;
++		if (SecureDTGetProperty(node, names[i], (void const **)&v, &size) == kSuccess &&
++		    size == sizeof(uint32_t)) {
++			*vals[i] = *v;
++		}
++	}
++}
++
+ static vm_offset_t keys_core, keys_obs, keys_cnfg;
+ static uint16_t keys_pon_apid = KEYS_NO_APID, keys_gpio_apid = KEYS_NO_APID;
+ static uint32_t keys_version, keys_last_status;
+@@ -99,9 +130,9 @@ keys_thread(void *arg, wait_result_t result)
+ 	(void)result;
+ 	for (;;) {
+ 		uint8_t pon = 0, gpio = 0;
+-		bool pok = keys_read(keys_pon_apid, KEYS_PON_RT, &pon);
+-		bool gok = keys_read(keys_gpio_apid, KEYS_GPIO_RT, &gpio);
+-		int now[3] = {!!(pon & 1u), !(gpio & 1u), !!(pon & 2u)};
++		bool pok = keys_read(keys_pon_apid, (uint16_t)keys_pon_rt, &pon);
++		bool gok = keys_read(keys_gpio_apid, (uint16_t)(keys_gpio_base + 0x10), &gpio);
++		int now[3] = {!!(pon & keys_pwr_mask), !(gpio & 1u), !!(pon & keys_down_mask)};
+ 		if (!pok || !gok) {
+ 			if ((errors++ % 250u) == 0) {
+ 				printf("SWEET KEYS: read error pon-ok=%d gpio-ok=%d arb-status=%#x\n",
+@@ -113,7 +144,7 @@ keys_thread(void *arg, wait_result_t result)
+ 		for (int k = 0; k < 3; ++k) {
+ 			if ((k == 1 ? gok : pok) && now[k] != state[k]) {
+ 				state[k] = now[k];
+-				printf("SWEET KEYS: key=%d down=%d pon=%#x gpio4:c110=%#x\n",
++				printf("SWEET KEYS: key=%d down=%d pon=%#x gpio=%#x\n",
+ 				    k, state[k], pon, gpio);
+ 				sweet_hid_key(k, state[k]);
+ 			}
+@@ -151,22 +182,24 @@ sweet_keys_init(void)
+ 		    keys_version, count);
+ 		return;
+ 	}
+-	keys_pon_apid = keys_find_apid(0x008, count);
+-	keys_gpio_apid = keys_find_apid(0x4c1, count);
++	keys_adt();
++	keys_pon_apid = keys_find_apid((uint16_t)keys_pon_ppid, count);
++	keys_gpio_apid = keys_find_apid((uint16_t)keys_gpio_ppid, count);
+ 	uint8_t pon = 0, gpio = 0, mode = 0, en = 0, subtype = 0;
+-	bool pok = keys_read(keys_pon_apid, KEYS_PON_RT, &pon);
+-	bool gok = keys_read(keys_gpio_apid, KEYS_GPIO_RT, &gpio);
+-	bool mok = keys_read(keys_gpio_apid, 0xc140, &mode);
+-	bool eok = keys_read(keys_gpio_apid, 0xc146, &en);
+-	bool sok = keys_read(keys_gpio_apid, 0xc105, &subtype);
+-	printf("SWEET KEYS: arb=%#x apids=%u pon-apid=%u gpio4-apid=%u pon=%#x/%d gpio=%#x/%d mode=%#x/%d en=%#x/%d subtype=%#x/%d\n",
+-	    keys_version, count, keys_pon_apid, keys_gpio_apid,
++	uint16_t gb = (uint16_t)keys_gpio_base;
++	bool pok = keys_read(keys_pon_apid, (uint16_t)keys_pon_rt, &pon);
++	bool gok = keys_read(keys_gpio_apid, (uint16_t)(gb + 0x10), &gpio);
++	bool mok = keys_read(keys_gpio_apid, (uint16_t)(gb + 0x40), &mode);
++	bool eok = keys_read(keys_gpio_apid, (uint16_t)(gb + 0x46), &en);
++	bool sok = keys_read(keys_gpio_apid, (uint16_t)(gb + 0x05), &subtype);
++	printf("SWEET KEYS: arb=%#x apids=%u pon %#x@%#x apid=%u gpio %#x apid=%u pon=%#x/%d gpio=%#x/%d mode=%#x/%d en=%#x/%d subtype=%#x/%d\n",
++	    keys_version, count, keys_pon_ppid, keys_pon_rt, keys_pon_apid, keys_gpio_ppid, keys_gpio_apid,
+ 	    pon, pok, gpio, gok, mode, mok, en, eok, subtype, sok);
+ 	/* GPIO configuration belongs to firmware. Diagnose, never repair it here. */
+ 	unsigned dir = subtype >= 0x10u && subtype <= 0x13u ?
+ 	    mode & 3u : (mode >> 4) & 7u;
+ 	if (!eok || !mok || !sok || !(en & 0x80u) || (dir != 0 && dir != 2)) {
+-		printf("SWEET KEYS: GPIO2 not confirmed enabled as input; volume-up withheld, PMIC unchanged\n");
++		printf("SWEET KEYS: volume-up GPIO not confirmed enabled as input; withheld, PMIC unchanged\n");
+ 		keys_gpio_apid = KEYS_NO_APID;
+ 	}
+ 	if (!pok && !gok) {
+diff --git a/bsd/dev/sweet_spmi.c b/bsd/dev/sweet_spmi.c
+index 1981490..aaff851 100644
+--- a/bsd/dev/sweet_spmi.c
++++ b/bsd/dev/sweet_spmi.c
+@@ -86,11 +86,14 @@ sweet_spmi_init(void)
+ int
+ sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out)
+ {
+-	/* Restrict access to the battery blocks; keys retain their own lanes. */
++	/*
++	 * Restrict access to the battery blocks and the RTC (SID 0 0x61: PMK8350
++	 * on Spacewar, read by SweetPlatformExpert); keys retain their own lanes.
++	 */
+ 	unsigned peripheral = addr >> 8;
+ 	if (!sp_ready || !out || sid != 0 || addr > 0xffffu ||
+ 	    (peripheral != 0x10 && peripheral != 0x11 && peripheral != 0x12 &&
+-	    peripheral != 0x13 && peripheral != 0x48)) {
++	    peripheral != 0x13 && peripheral != 0x48 && peripheral != 0x61)) {
+ 		return -1;
+ 	}
+ 	IOLockLock(sp_lock);
+diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+index 0631685..f350941 100644
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -10,6 +10,10 @@
+ #include <IOKit/IODeviceTreeSupport.h>
+ #include <IOKit/IOLib.h>
+ 
++/* bsd/dev/sweet_spmi.c */
++extern "C" int sweet_spmi_init(void);
++extern "C" int sweet_spmi_read(unsigned sid, unsigned addr, uint8_t *out);
++
+ class SweetPlatformExpert : public IODTPlatformExpert {
+ 	OSDeclareDefaultStructors(SweetPlatformExpert);
+ 
+@@ -18,6 +22,7 @@ public:
+ 	void processTopLevel(IORegistryEntry *root) APPLE_KEXT_OVERRIDE;
+ 	const char *deleteList(void) APPLE_KEXT_OVERRIDE;
+ 	const char *excludeList(void) APPLE_KEXT_OVERRIDE;
++	void getUTCTimeOfDay(clock_sec_t *secs, clock_nsec_t *nsecs) APPLE_KEXT_OVERRIDE;
+ };
+ 
+ OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
+@@ -74,6 +79,57 @@ SweetPlatformExpert::processTopLevel(IORegistryEntry *root)
+ 	}
+ }
+ 
++static uint32_t
++sweet_adt_u32(IORegistryEntry *entry, const char *key)
++{
++	OSData *data = OSDynamicCast(OSData, entry->getProperty(key));
++	return data && data->getLength() == sizeof(uint32_t) ?
++	       *(const uint32_t *)data->getBytesNoCopy() : 0;
++}
++
++/*
++ * Calendar seed for clock_initialize_calendar(). ADT /sweet-rtc (Spacewar):
++ * the PMK8350 RTC counts seconds from an arbitrary base; Qualcomm's
++ * time_daemon keeps "real time - RTC" in persist (time/ats_2, ms), copied
++ * into offset-ms by tools/mkadt.py. Without the node (sweet): epoch, as before.
++ */
++void
++SweetPlatformExpert::getUTCTimeOfDay(clock_sec_t *secs, clock_nsec_t *nsecs)
++{
++	*secs = 0;
++	*nsecs = 0;
++	IORegistryEntry *rtc = IORegistryEntry::fromPath("/sweet-rtc", gIODTPlane);
++	if (rtc == NULL) {
++		return;
++	}
++	unsigned base = sweet_adt_u32(rtc, "base");
++	OSData *offset = OSDynamicCast(OSData, rtc->getProperty("offset-ms"));
++	uint64_t offset_ms = offset && offset->getLength() == sizeof(uint64_t) ?
++	    *(const uint64_t *)offset->getBytesNoCopy() : 0;
++	rtc->release();
++
++	uint8_t ctrl = 0, b[4] = { 0, 0, 0, 0 }, again = 0;
++	if (!base || sweet_spmi_init() || sweet_spmi_read(0, base + 0x46, &ctrl) || !(ctrl & 0x80)) {
++		IOLog("SWEET RTC: unavailable (base %#x ctrl %#x)\n", base, ctrl);
++		return;
++	}
++	/* RDATA0..3 (rtc-pm8xxx pmk8350 layout); re-read if the low byte rolled over. */
++	for (int tries = 0; tries < 3; tries++) {
++		for (int i = 0; i < 4; i++) {
++			if (sweet_spmi_read(0, base + 0x48 + i, &b[i])) {
++				IOLog("SWEET RTC: read failed\n");
++				return;
++			}
++		}
++		if (sweet_spmi_read(0, base + 0x48, &again) == 0 && again == b[0]) {
++			break;
++		}
++	}
++	uint32_t raw = (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
++	*secs = (clock_sec_t)(raw + offset_ms / 1000);
++	IOLog("SWEET RTC: raw %u s + offset %llu ms -> %lu\n", raw, offset_ms, (unsigned long)*secs);
++}
++
+ /*
+  * hw.target / hw.product come from IODTPlatformExpert: the first root
+  * "compatible" string and "model" (D22AP / iPhone10,3 in the ADT), which

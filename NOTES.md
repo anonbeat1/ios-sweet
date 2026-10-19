@@ -152,6 +152,11 @@ Separate effort from sweet; sweet handoff below is unchanged.
     Touch and buttons are off (sweettouch=0 sweetkeys=0: sweet's Goodix-I2C/PM6150 drivers do not apply) -> cannot unlock yet.
     Lock screen photo (user, 2026-10-19): "Wednesday, December 31 4:17" = clock near the Unix epoch (no RTC read; PMK8350
     RTC over SPMI would fix it), battery = static 100% charging fallback, camera button + home indicator drawn.
+  - xnu 0088 (keys + clock): sweet_keys.c takes PON/GPIO sources from ADT /sweet-keys (Spacewar: PMK8350 SID0 PON 0x1310
+    KPDPWR bit7 / RESIN bit6, volume-up PM7325 SID1 GPIO6 periph 0x8d); SweetPlatformExpert::getUTCTimeOfDay reads the
+    PMK8350 RTC (rtc@6100: ctrl 0x6146 bit7, RDATA 0x6148..b) via sweet_spmi_read (whitelist + periph 0x61) and adds ADT
+    /sweet-rtc offset-ms = persist time/ats_2 (0x01a15422972b ms = 2026-10-19 12:28:35 UTC, i.e. the RTC base). All PMIC
+    access read-only. sweet: no ADT nodes -> unchanged behaviour.
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
     over SPMI (same arbiter as sweet, new PPID/APID); (3) touch: Focaltech 0x5662 on SPI (QUP SE @0xa94000, irq gpio 417,
     reset gpio 441) with the 119284-byte firmware upload from fts_tp.ko; (4) identify the crash loops.

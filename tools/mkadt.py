@@ -42,6 +42,15 @@ SPACEWAR_FB = 0xe1000000
 # vcc-voltage-level <2504000 2952000>. ABL leaves it unusable (media reads hang).
 SPACEWAR_UFS_VCC, SPACEWAR_UFS_VCC_MV = 'ldob7', 2952
 SPACEWAR_CMD_DB = (0x80860000, 0x20000)  # reserved-memory cmd_db, qcom,cmd-db
+# Keys (bsd/dev/sweet_keys.c): power/volume-down on PMK8350 SID 0 PON gen3
+# (pon_hlos@1300, RT_STS 0x1310: KPDPWR bit 7, RESIN bit 6); volume-up on
+# PM7325 (SID 1) GPIO6 = peripheral 0x8d, active low.
+SPACEWAR_KEYS = dict(pon_ppid=0x013, pon_rt=0x1310, pwr_mask=0x80, down_mask=0x40,
+                     gpio_ppid=0x18d, gpio_base=0x8d00)
+# RTC (SweetPlatformExpert): PMK8350 rtc@6100 counts seconds from an arbitrary
+# base; real time = RTC + Qualcomm time_daemon's offset from persist
+# time/ats_2 (ms), as backed up on 2026-10-19 (valid until the RTC resets).
+SPACEWAR_RTC_BASE, SPACEWAR_RTC_OFFSET_MS = 0x6100, 0x01a15422972b
 
 BOOT_MANIFEST_HASH = hashlib.sha384(b'sweet boot manifest').digest()
 
@@ -207,7 +216,10 @@ def build(seed=None, qemu=False, highmem=False, spacewar=False):
         ('reg', u64(UFS, UFS_SIZE)),
     ] + ([('vcc-rpmh', cstr(SPACEWAR_UFS_VCC)), ('vcc-mv', u32(SPACEWAR_UFS_VCC_MV))] if spacewar else []))
     # bsd/dev/sweet_rpmh.c: cmd-db without the AOP locator (Spacewar).
-    rpmh = [node('sweet-rpmh', [ph(), ('cmd-db', u64(*SPACEWAR_CMD_DB))])] if spacewar else []
+    rpmh = [node('sweet-rpmh', [ph(), ('cmd-db', u64(*SPACEWAR_CMD_DB))]),
+            node('sweet-keys', [ph()] + [(k.replace('_', '-'), u32(v)) for k, v in SPACEWAR_KEYS.items()]),
+            node('sweet-rtc', [ph(), ('base', u32(SPACEWAR_RTC_BASE)),
+                               ('offset-ms', u64(SPACEWAR_RTC_OFFSET_MS))])] if spacewar else []
 
     # pmap_compute_max_asids requires the node even when no overrides are set.
     # An absent pmap-max-asids property selects XNU's own MAX_ASIDS default.
