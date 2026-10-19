@@ -650,11 +650,12 @@ static void gpi_debug_dump(void)
  * touch7: NOP and CONFIG0 TREs complete (EOB events: GPI DMA through the
  * SMMU works), but a full-duplex GO + DMA after them stays pending (ch0 RP
  * stuck on the GO, GENI idle) while touch6's chained CONFIG0 + GO + DMA
- * crashed. TOUCH_TEST picks one TX-only 0x55 write per boot:
- *   1: CONFIG0 alone, then GO + DMA     2: CONFIG0 + GO + DMA chained
+ * crashed. TOUCH_TEST picks one TX-only 0x55 write per boot (after a NOP):
+ *   2: CONFIG0 + GO + DMA chained     3: GO + DMA, no CONFIG0
+ * (1, CONFIG0 alone then GO, and a LOCK after it: both stall, touch10-13)
  */
 #ifndef TOUCH_TEST
-#define TOUCH_TEST 1
+#define TOUCH_TEST 2
 #endif
 /* touch11: div 8 so a CONFIG0 that reaches the SE shows up as M_CLK_CFG 0x81 (we left 0x41) */
 #define TRE_CONFIG0(chain)	{ { 3u << 24 | (8 - 4), 0, 8, 2u << 20 | 2u << 16 | (chain ? 1u : 1u << 8) } }
@@ -671,27 +672,22 @@ static void gsi_tests(void)
 	udelay(1000);
 	ts_reset(1);
 	udelay(8000);
-#if TOUCH_TEST == 1
-	const struct tre c0[1] = { TRE_CONFIG0(0) };
-	wr(SE(0x268), (rd(SE(0x268)) & ~0x3ffu) | 0x1f);	/* bogus word len: CONFIG0 should set 4 */
-	gsi_step("CONFIG0", 1, c0);
-	/* RCG DFS (clk-rcg2.c: CMD_DFSR +0x14, PERF_DFSR(0) +0x1c) and what CONFIG0 left in the SE */
 	/*
-	 * touch12: GO pending with the GPI PC parked at 0x547 and the doorbell
-	 * seen (ch0 WP). SE13 is the trusted-touch SE: try taking the SE lock
-	 * (setup_lock_tre: LOCK TRE, IEOB) before the GO, as shared_se does.
+	 * touch13: a LOCK after the standalone CONFIG0 stalled like the GO
+	 * (PC 0x547). Linux never sends CONFIG0 alone: it always chains it into
+	 * the GO. 2: CONFIG0+GO+DMA chained; 3: GO+DMA only (the FIFO-mode init
+	 * already left 8-bit words and the clock divider in the SE).
 	 */
-	static const struct tre lock[1] = { { { 0, 0, 0, 3u << 20 | 0u << 16 | 1u << 8 } } };
-	con_str("TOUCH", "page 2 in 5 s (NOP + CONFIG0 done)");
+	con_str("TOUCH", "page 2 in 5 s");
 	udelay(5000000);
 	con_clear(BLUE);
-	con_hex2("TOUCH", "page 2: ch0 rp=", rd(CH_CTX(0) + 0x10), "m_clk=", rd(SE(0x48)));
-	gsi_step("LOCK", 1, lock);
-	const struct tre go[2] = { TRE_GO_TX(4), TRE_DMA_TX(4) };
-	gsi_step("GO+DMA", 2, go);
-#else
+	con_hex2("TOUCH", "page 2: ch0 rp=", rd(CH_CTX(0) + 0x10), "test=", TOUCH_TEST);
+#if TOUCH_TEST == 2
 	const struct tre all[3] = { TRE_CONFIG0(1), TRE_GO_TX(4), TRE_DMA_TX(4) };
 	gsi_step("C0+GO+DMA", 3, all);
+#else
+	const struct tre go[2] = { TRE_GO_TX(4), TRE_DMA_TX(4) };
+	gsi_step("GO+DMA", 2, go);
 #endif
 	if (rd(CH_CTX(0) + 0x10) != (uint32_t)(uintptr_t)&tx_ring[tx_wp]) {
 		gpi_debug_dump();

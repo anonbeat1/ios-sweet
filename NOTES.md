@@ -273,6 +273,12 @@ Separate effort from sweet; sweet handoff below is unchanged.
     not set), ch0 WP 0xA00B2C40 (doorbell seen), R_LENGTH 0x400.
     touch13 (`shim/out/spacewar-touch13-lock.img`): hypothesis (unverified) SE13 firmware is multi-EE locked (trusted touch),
     so the GO needs a LOCK TRE (major 3 minor 0, IEOB) first: NOP, CONFIG0, LOCK, GO+DMA, then boot-id read if it worked.
+    **touch13 result (19:29, photos)**: the LOCK TRE stalls exactly like the GO (ch0 RP stays on the LOCK, no event, PC
+    0x547, no error). So after a standalone CONFIG0 (IEOB, no chain) nothing but NOP-like TREs ever completed. Linux never
+    sends CONFIG0 alone (always chained into GO); hypothesis: the unchained CONFIG0 leaves the channel mid-transaction.
+    touch14 (GPII 0, NOP, page 2 after 5 s): `shim/out/spacewar-touch14-t2.img` = CONFIG0+GO+DMA chained (Linux order; on
+    GPII 1 this froze, touch8 t2); `shim/out/spacewar-touch14-t3.img` = GO+DMA only, no CONFIG0 (SE already has 8-bit words
+    and div 4 from the FIFO-mode init). Both continue to the boot-id read if the GO completes.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
