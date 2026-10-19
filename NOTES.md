@@ -25,7 +25,13 @@ Separate effort from sweet; sweet handoff below is unchanged.
   **Probe 1** (`shim/spacewar.c`, `shim/build-spacewar.sh` on macOS clang+lld, `tools/mkbootimg_v3.py`, commit c18860f):
   ABL ran it; user saw **text on dark-green background** => our code runs at entry, an SSPP scans out of the splash region,
   format is 1080x2400 32 bpp stride 4320, and writing CTL_START on the active CTL refreshes the cmd-mode panel. Screen = debug channel.
-  Register values from the photo: (pending).
+  Probe 1 photo: PIPE n=0 shift=0 (VIG0 @MDP+0x5000: downstream DT offsets are right, not mainline), SRC addr=0xE1000000
+  stride=0x10E0, wh=0x09600438 (2400x1080), fmt=0x000237FF; CTL0 top=F0020000 (active), CTL1/2 top=F0001F00; PP autoref=0.
+  But only a middle band showed our green text; top/bottom = purple noise.
+  **Probe 2** (87672f4: CPU7 PSCI-started, kicking CTL_START every 20 ms): screen kept the old NOTHING boot logo plus a noisy
+  band at the top only; page 1 never appeared (unknown whether CPU7 ran, or whether free-running kicks corrupt transfers).
+  **Probe 3** (7a15cd1, booted 14:34): single kick after drawing, dumps INTF1 tear regs (0x280..0x2ac, mainline DPU>=5 layout,
+  unverified), then INTF autorefresh (0x2ac = 1<<31|1 + one kick) with TICK rows and no kicks. Result: (pending).
   Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
 - Next: (4) temp root (Magisk-patched boot via fastboot boot)
   to pull live FDT, /proc/iomem and partition backups (persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots).
