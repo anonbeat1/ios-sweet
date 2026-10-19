@@ -216,7 +216,7 @@ index 000000000000..159863ef5940
 +}
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
-index b6c1a41ba737..166ac1cce9d4 100644
+index b6c1a41ba737..9c3ea52ac0d0 100644
 --- a/bsd/dev/sweet_usb.c
 +++ b/bsd/dev/sweet_usb.c
 @@ -36,17 +36,58 @@
@@ -356,3 +356,21 @@ index b6c1a41ba737..166ac1cce9d4 100644
  	dwc_wr(DCTL, DCTL_CSFTRST);
  	int i;
  	for (i = 0; i < 500 && (dwc_rd(DCTL) & DCTL_CSFTRST); i++) {
+@@ -889,6 +958,7 @@ sweet_usb_gadget_start(vm_offset_t dwc)
+ 	dwc_wr(DCFG, dcfg | 0);
+ 	/* Events: disconnect, USB reset, connect done */
+ 	dwc_wr(DEVTEN, 0x7);
++	printf("SWEET USB: event buf + DCFG done; configuring endpoints\n");
+ 
+ 	/* Endpoint 0 OUT/IN: start config, control type, max packet 512 until connect done. */
+ 	if (ud_epcmd(0, DEPCMD_DEPSTARTCFG, 0, 0, 0) ||
+@@ -900,7 +970,9 @@ sweet_usb_gadget_start(vm_offset_t dwc)
+ 		return;
+ 	}
+ 	dwc_wr(DALEPENA, 0x3);
++	printf("SWEET USB: endpoints ready; arming setup (first DMA)\n");
+ 	ud_start_setup();
++	printf("SWEET USB: setup armed; VBUS override\n");
+ 
+ 	vm_offset_t qs = ml_io_map(QSCRATCH_PA, 0x100);
+ 	if (qs != 0) {
