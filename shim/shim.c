@@ -11,9 +11,6 @@
 #include "mmu.h"
 #include "loader.h"
 #include "ufs.h"
-#ifdef SPACEWAR
-#include "spacewar.h"
-#endif
 
 #define IMEM_RESTART_REASON	0x146aa65cUL	/* qcom,msm-imem restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
@@ -170,10 +167,6 @@ static uintptr_t find_gicr(void);
 
 void secondary_main(uint64_t idx)
 {
-#ifdef SPACEWAR
-	if (idx == SW_KICK_CPU)
-		sw_kick_loop();
-#endif
 	sec_mpidr[idx] = rsr("mpidr_el1") | (1ULL << 63);
 	if (idx == 1) {
 		uintptr_t r = find_gicr();
@@ -383,52 +376,18 @@ void shim_main(uint64_t dtb)
 
 #ifdef SPACEWAR
 	/*
-	 * Probe 4. Probe 3's video: ABL leaves the cmd-mode pipeline refreshing
-	 * by itself (our blue fill appeared top-down with no kick), then the
-	 * picture froze within ~1 s while CTL/PP registers were being read and
-	 * the CPU never reset. Phase A touches no MDP register for 20 s (if the
-	 * ms counter freezes, refresh dies on its own); phase B reads one
-	 * register at a time, address on screen first (the last row names it).
+	 * Probe 5. Probes 1-4 (NOTES.md): ABL leaves the cmd-mode panel
+	 * refreshing from the splash buffer on its own, and any CTL_START kick
+	 * freezes it. So: never write MDP, just draw (FB_BASE).
 	 */
-	static const uint32_t regs[] = {
-		0x5014, 0x5000, 0x5024, 0x5030,				/* SSPP VIG0 */
-		0x16014, 0x16000, 0x16018, 0x6a030,			/* CTL0, PP0 */
-		0x17014, 0x17000, 0x17018, 0x6b030,			/* CTL1, PP1 */
-		0x18014, 0x18000, 0x18018, 0x6c030,			/* CTL2, PP2 */
-		0x19014, 0x19000, 0x19018, 0x6d030,			/* CTL3, PP3 */
-		0x36280, 0x36284, 0x36288, 0x362a8, 0x362ac,		/* INTF1 tear */
-	};
-	stage = "display";
-	uint64_t t0 = now();
-	for (unsigned i = 0; i < 200; i++) {
-		if (i % 40 == 0) {
-			con_clear(i / 40 % 2 ? BLUE : RED);
-			con_str("SHIM", "spacewar probe 4: A no regs");
-		}
-		con_hex2("T", "ms=", to_us(now() - t0) / 1000, "i=", i);
-		delay_ms(100);
-	}
-	for (unsigned i = 0; i < sizeof(regs) / sizeof(regs[0]); i++) {
-		if (i % 10 == 0) {
-			con_clear(i / 10 % 2 ? RED : BLUE);
-			con_str("SHIM", "spacewar probe 4: B reads");
-		}
-		con_hex2("READ", "a=", 0x0ae00000U + regs[i], 0, 0);
-		delay_ms(300);
-		con_hex2(" ", "v=", rd32(0x0ae00000UL + regs[i]), 0, 0);
-		delay_ms(300);
-	}
-	con_str("DONE", "all reads ok");
-	reset(10);
+	stage = "page 1";
 	con_clear(RED);
-	con_str("SHIM", "spacewar probe 3, page 1/2");
+	con_str("SHIM", "spacewar probe 5, page 1/2");
 	con_hex2("DTB", "at=", dtb, "magic=", dtb ? __builtin_bswap32(rd32(dtb)) : 0);
 	con_hex2("MIDR", "cpu0=", rsr("midr_el1"), "el=", rsr("CurrentEL") >> 2);
 	con_hex2("CNTFRQ", "hz=", rsr("cntfrq_el0"), 0, 0);
 	con_skip();
-	sw_display_dump();
-	con_skip();
-	test_smp();	/* without autorefresh CPU7 runs the kick loop: ALREADY_ON */
+	test_smp();
 	con_skip();
 	con_str("PAGE 2", "in 45s");
 	delay_ms(45000);
@@ -468,7 +427,7 @@ void shim_main(uint64_t dtb)
 #ifndef SPACEWAR
 	con_str("SHIM", "sweet milestone 3");
 #else
-	con_str("SHIM", "spacewar probe 3, page 2/2");
+	con_str("SHIM", "spacewar probe 5, page 2/2");
 #endif
 	con_skip();
 	con_hex2("DTB", "at=", dtb, "magic=", dtb ? __builtin_bswap32(rd32(dtb)) : 0);

@@ -2,7 +2,7 @@
 #include <stdint.h>
 
 #ifdef SPACEWAR
-#define FB_BASE		0xe1000000UL	/* splash_region; scanout found at runtime (spacewar.c) */
+#define FB_BASE		0xe1000000UL	/* splash_region = VIG0 scanout, 1080x2400x4 (probe 1) */
 #else
 #define FB_BASE		0x9c000000UL	/* reserved-memory cont_splash_region */
 #endif

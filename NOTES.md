@@ -31,7 +31,16 @@ Separate effort from sweet; sweet handoff below is unchanged.
   **Probe 2** (87672f4: CPU7 PSCI-started, kicking CTL_START every 20 ms): screen kept the old NOTHING boot logo plus a noisy
   band at the top only; page 1 never appeared (unknown whether CPU7 ran, or whether free-running kicks corrupt transfers).
   **Probe 3** (7a15cd1, booted 14:34): single kick after drawing, dumps INTF1 tear regs (0x280..0x2ac, mainline DPU>=5 layout,
-  unverified), then INTF autorefresh (0x2ac = 1<<31|1 + one kick) with TICK rows and no kicks. Result: (pending).
+  unverified), then INTF autorefresh (0x2ac = 1<<31|1 + one kick) with TICK rows and no kicks. Result (video): the blue
+  fill appeared top-down *while the CPU painted* (panel already refreshing with no kick), froze within ~1 s mid-dump,
+  no TICK rows, no visible reboot.
+  **Probe 4** (4fc0d25): 20 s of drawing with no MDP access, then 25 single labelled reads (SSPP0, CTL0-3, PP0-3, INTF1
+  0x280..0x2ac): everything stayed live to "DONE", reset OK (user report; video exists, values not transcribed yet).
+  **Conclusion: ABL leaves the cmd-mode pipeline refreshing from 0xE1000000 by itself; our CTL_START write is what
+  froze probes 1-3** (frozen frame = the transfer in flight at the kick). So: never write MDP; treat the splash buffer as a
+  plain framebuffer like sweet. Kick code removed (spacewar.c deleted). The purple noise band at the top (~first 260
+  lines) seen in probes 1-3 is not explained yet.
+  **Probe 5**: shim.c -DSPACEWAR page 1 (DTB, MIDR, CNTFRQ, PSCI CPU_ON 1..7), page 2 (sweet milestone-3: 16K MMU, PSCI, GIC).
   Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
 - Next: (4) temp root (Magisk-patched boot via fastboot boot)
   to pull live FDT, /proc/iomem and partition backups (persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots).
