@@ -627,7 +627,23 @@ static void gsi_step(const char *what, unsigned n, const struct tre *t)
 	dc_civac(ev_ring, sizeof(ev_ring));
 	while ((uint32_t)(uintptr_t)&ev_ring[ev_rp] != rd(EV_CTX + 0x10) && ev_rp < NTRE - 1)
 		ev_rp++;
+	/* gpi_process_events: give the consumed elements back, clear IEOB */
+	wr(EV_DB, (uint32_t)(uintptr_t)&ev_ring[(ev_rp + NTRE - 1) % NTRE]);
+	wr(G(0x230c0), 1);
 	gsi_dump(" ->");
+}
+
+/* gpi_dump_debug_reg: microcontroller PC, SW_RF, QSB log (gpi-top relative) */
+#define GPI_TOP		0x00a00000UL
+static void gpi_debug_dump(void)
+{
+	con_hex2("GPI dbg", "pc=", rd(GPI_TOP + 0x5048), "pc=", rd(GPI_TOP + 0x5048));
+	con_hex2("", "pc=", rd(GPI_TOP + 0x5048), "pc=", rd(GPI_TOP + 0x5048));
+	con_hex2("", "rf10=", rd(GPI_TOP + 0x5100 + 40), "rf11=", rd(GPI_TOP + 0x5100 + 44));
+	con_hex2("", "rf12=", rd(GPI_TOP + 0x5100 + 48), "rf21=", rd(GPI_TOP + 0x5100 + 84));
+	con_hex2("", "qsb0=", rd(GPI_TOP + 0x5064), "qsb1=", rd(GPI_TOP + 0x5068));
+	con_hex2("", "qsb2=", rd(GPI_TOP + 0x506c), "errid=", rd(GPI_TOP + 0x5060));
+	con_hex2("", "ch0 wp=", rd(CH_CTX(0) + 0x18), "ch0 c1=", rd(CH_CTX(0) + 0x4));
 }
 
 /*
@@ -660,10 +676,7 @@ static void gsi_tests(void)
 	wr(SE(0x268), (rd(SE(0x268)) & ~0x3ffu) | 0x1f);	/* bogus word len: CONFIG0 should set 4 */
 	gsi_step("CONFIG0", 1, c0);
 	/* RCG DFS (clk-rcg2.c: CMD_DFSR +0x14, PERF_DFSR(0) +0x1c) and what CONFIG0 left in the SE */
-	con_hex2("S5 RCG", "dfsr=", rd(GCC + 0x18600 + 0x14), "perf0=", rd(GCC + 0x18600 + 0x1c));
 	con_hex2("SE13", "clk_sel=", rd(SE(0x7c)), "m_clk=", rd(SE(0x48)));
-	con_hex2("SE13", "word=", rd(SE(0x268)), "txpack=", rd(SE(0x260)));
-	con_hex2("SE13", "gsi_ev=", rd(SE(0xe18)), "dma_mode=", rd(SE(0x258)));
 	const struct tre go[2] = { TRE_GO_TX(4), TRE_DMA_TX(4) };
 	gsi_step("GO+DMA", 2, go);
 #else
@@ -671,6 +684,7 @@ static void gsi_tests(void)
 	gsi_step("C0+GO+DMA", 3, all);
 #endif
 	if (rd(CH_CTX(0) + 0x10) != (uint32_t)(uintptr_t)&tx_ring[tx_wp]) {
+		gpi_debug_dump();
 		con_str("TOUCH", "GO still pending: stop");
 		return;
 	}

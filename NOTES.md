@@ -261,6 +261,12 @@ Separate effort from sweet; sweet handoff below is unchanged.
     touch11 (`shim/out/spacewar-touch11-cfg.img`, GPII 0): CONFIG0 with div 8 and a bogus SE word length (0x1f) beforehand;
     prints M_CLK_CFG / WORD_LEN / TX_PACKING / GSI_EVENT_EN / DMA_MODE after it: 0x81 and word 4 => the GPI does program the
     SE (GO-specific problem); unchanged => GPI commands never reach SE13.
+    **touch11 result (19:24, photo)**: **CONFIG0 does reach SE13** (M_CLK_CFG 0x41 -> 0x81, WORD_LEN 0x1f -> 4, TX_PACKING
+    0x7f8fe, GSI_EVENT_EN 0xf, DMA_MODE_EN 1): the GPI -> SE command path works; only GO is never executed (M_CMD0 0, GENI
+    idle, ch0 RP on the GO). GO/DMA TRE layout re-checked against spi-msm-geni.c and mainline gpi.c: identical.
+    touch12 (`shim/out/spacewar-touch12-dbg.img`): events returned to the ring + IEOB cleared after each step (like
+    gpi_process_events); if the GO stays pending, dumps GPI debug (gpi-top +0x5048 PC x4, SW_RF 10/11/12/21, QSB log,
+    ch0 WP/R_LENGTH).
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
