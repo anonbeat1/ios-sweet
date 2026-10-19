@@ -157,6 +157,22 @@ Separate effort from sweet; sweet handoff below is unchanged.
     PMK8350 RTC (rtc@6100: ctrl 0x6146 bit7, RDATA 0x6148..b) via sweet_spmi_read (whitelist + periph 0x61) and adds ADT
     /sweet-rtc offset-ms = persist time/ats_2 (0x01a15422972b ms = 2026-10-19 12:28:35 UTC, i.e. the RTC base). All PMIC
     access read-only. sweet: no ADT nodes -> unchanged behaviour.
+  - **Touch facts** (live DT + Nothing kernel source github.com/NothingOSS/android_kernel_msm-5.4_nothing_sm7325, sparse
+    checkout in `spacewar-stock/nothing-kernel/`): Focaltech **FT3680** (chip id 0x5662, FTS_CHIP_TYPE 0x3680008A) on QUP SE13
+    = `qupv3_se13_spi` @0xa94000 (wrapper 1 SE5), spi-max 6 MHz, CS 0; irq TLMM gpio81, reset gpio105; vdd = **ldoc3**
+    (pm8350c L3) at 3.3 V, iovdd = **ldoc8** (pm8350c L8) at 1.8 V (driver FTS_VTG_*), used only by touch. Power-on: reset low,
+    iovdd, 1 ms, vdd; reset pulse low 1 ms. SPI frames (focaltech_spi.c): read = [reg, 0xA0, lenH, lenL, 3 dummy] + data + CRC16
+    (poly 0x8408, init 0xFFFF), write = [reg, 0x00, lenH, lenL, 3 dummy, data]; status rx[3] & 0xA0 must be 0; CS high 150 us.
+    Firmware = `include/firmware/FT3680_WXN_M146_V27_D01_20220706_app.i` (119284 bytes, byte-identical to the blob in the
+    phone's fts_tp.ko) downloaded to PRAM every boot (focaltech_flash.c: fts_fw_download/fts_dpram_write/ECC/pram start).
+    GCC (gcc-yupik.c): APCS vote 0x52008 bits 27 (SE13, CBCR 0x185fc), 20/21 (wrap1 m/s AHB, HW-gated: read CLK_OFF idle),
+    18/19 (wrap1 core, already on); SE13 RCG 0x18600 cfg 0x00100000 = XO 19.2 MHz. TLMM (pinctrl-yupik.c): gpio n at
+    0x0f100000 + n*0x1000 (ctl, +4 io); gpio52-55 function 1 = qup15 (SE13).
+  - **Touch probes** (shim, `shim/touchprobe.c`): after ABL the SE13 clock is off and gpio52-55/81/105 are plain GPIO inputs
+    with pull-down (ctl 0x1, io 0). Voting bits 27/21/20 turns SE13 on; then **SE13 FW_REVISION_RO = 0x0102 (protocol 1 = SPI
+    firmware already loaded by boot)**, GENI status 0, m_clk_cfg 0x11, irq_en 0x33C0007E. No bus hang.
+  - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
+    to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
     over SPMI (same arbiter as sweet, new PPID/APID); (3) touch: Focaltech 0x5662 on SPI (QUP SE @0xa94000, irq gpio 417,
     reset gpio 441) with the 119284-byte firmware upload from fts_tp.ko; (4) identify the crash loops.
