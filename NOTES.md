@@ -93,6 +93,14 @@ Separate effort from sweet; sweet handoff below is unchanged.
     "SWEET EARLY 20: kprintf startup complete", then panic "Undefined kernel instruction pc=0xfffffe0007491340
     instr=d51be228 @sleh.c:951" = `msr CNTP_CTL_EL0` in _enable_virtual_timer (fiq_context_init). xnu 0083 skips that
     precautionary write under SWEET (only EL1 CNTP_* use in the kernel).
+  - **XNU 0083 boots on Spacewar to the root wait (2026-10-19 15:48, run 39261877945, `shim/out/spacewar-xnu-0083.img`,
+    cmdline `debug=0xc serial=3 cpus=1 keepsyms=1 sweetkeys=0 sweettouch=0 sweetusb=0 ufsroot=ios_none`)**: photo shows
+    platform expert, AMFI/sandbox/AKS/WDT/IOSurface/HID registered, "SWEET FB: AppleCLCD 1080x2400 stride 4320 at
+    0xe1000000 ... presented as 1125x2436", "SWEET CPU: cpu=0 mpidr=0x0 came alive; SGI1 OK", BSD/mbuf/dlil/HFS up, last
+    line "Waiting on <dict>IOProviderClass IOMedia Content Apple_HFS" (expected: no root partition named ios_none).
+    "debug_log_init: Error!! gPanicBase is still not initialized" also shows (seen before on sweet? unverified).
+  - Next: iOS root into Spacewar userdata (sda10, ~107 GB): **destructive, needs the user's OK**; needs the iOS root image
+    (built on the Linux host with tools/mkiosroot.sh; not on this Mac) and research/ipsw-x/d22ap.adt for /product.
   Mac USB quirk: after entering fastboot the Mac often sees nothing until the cable is replugged.
   Partition backups to take: persist, modemst1/2, fsg, fsc, boot/vendor_boot/dtbo/vbmeta both slots.
 
