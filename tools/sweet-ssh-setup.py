@@ -22,7 +22,8 @@ pull = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pull)
 
 LAUNCHD = '/System/Library/xpc/launchd.plist'
-JOB_KEY = '/var/jb/Library/LaunchDaemons/com.openssh.sshd.plist'
+# launchd ignored the job under /var/jb/Library/LaunchDaemons (no log line at all)
+JOB_KEY = '/System/Library/LaunchDaemons/com.openssh.sshd.plist'
 JOB = {
     'Label': 'com.openssh.sshd',
     'Program': '/var/jb/bin/sh',

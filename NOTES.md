@@ -557,6 +557,16 @@ Separate effort from sweet; sweet handoff below is unchanged.
     extension point cache; SSH installed (`sweet-ssh-setup.py`, 6584 entries, launchd.plist 795488 bytes, backup
     research/launchd.plist.pre-ssh + phone .pre-ssh). Takes effect at the next boot: then `ssh -i research/ssh/id_ed25519
     root@192.168.7.2`.
+    **MILESTONE (2026-10-20 ~20:50, boot 1F6EB8FC, 0102 + sweet-0102sw.adt): WALLPAPER VISIBLE** (user: "vedo lo sfondo").
+    lsd rebuilt the LS database on that boot (seeding started ~105 s after boot, ~2.4 s per bundle, >237 bundles in
+    9.5 min; the Apple logo stays until it finishes) and logged "Registering extension point: com.apple.posterkit.provider
+    ... PosterKit.framework" (also: "does not specify NSExtensionPointName", "Failed to fetch app bundle unit: 0" - harmless
+    so far). New lsd noise: amfi_interface_query_bootarg_state "Policy not found".
+    sshd did NOT start: port 22 closed; launchd_cache_loader.log says the unsecure cache was sent, launchd.log never names
+    com.openssh.sshd. Guess: launchd only bootstraps cache LaunchDaemons keyed under /System/Library/LaunchDaemons/. The job
+    key was moved to /System/Library/LaunchDaemons/com.openssh.sshd.plist on the phone (sweet-ssh-setup.py updated);
+    effective next boot. Logs: launchd's own file /private/var/log/com.apple.xpc.launchd/launchd.log. Incremental log pull
+    (newest 4 tracev3 of Persist/Special + timesync, uuidtext copied from the old archive): research/logs-0102.logarchive.
     SSH install (done, see above): `tools/sweet-ssh-setup.py
     research/procursus/bootstrap-ssh-1900.tar.zst research/ssh/id_ed25519.pub` = Procursus rootless 1900 bootstrap into
     /var/jb (4982 files, 1151 symlinks, 451 dirs), /bin/sh -> /var/jb/bin/sh, /var/root/.ssh/authorized_keys, sshd job
