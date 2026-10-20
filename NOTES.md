@@ -597,6 +597,13 @@ Separate effort from sweet; sweet handoff below is unchanged.
     dst as read back; image shim/out/spacewar-xnu-0105-restore-launchd.img. Expected for .pre-ssh: 795217 bytes, fnv
     57d344be; per 64K: a56c90a2 1df76fd2 bf476804 87203f80 98d19e75 079e077f cac184ce 8a66e353 d3fe1aaa 21154f99 c156d862
     acbd1d90 7d1907ec.
+    **0105 RESULT (photo ~21:49) = ROOT CAUSE of both panics:** source .pre-ssh read back 795217 bytes fnv 57d344be (exact),
+    destination launchd.plist after the copy = 795496 bytes: same first 795217 bytes + the old 279-byte tail. vnode_open()
+    with O_TRUNC does NOT truncate an existing file in this kernel, so any shorter rewrite (file server PUT, sweetcp,
+    ud_prefs_thread) leaves garbage at the end -> launchd "Unable to parse MRM cache" -> "No service cache" panic. The first
+    panic was the same thing (removing SessionCreate made launchd.plist shorter); LimitLoadToSessionType was NOT the cause
+    (my earlier guess was wrong). xnu 0106: sweet_vnode_set_size() (vnode_setattr va_data_size) after every kernel write
+    (CI 39486765287). Files written over the file server so far: only launchd.plist was ever rewritten shorter.
     Logs: launchd's own file /private/var/log/com.apple.xpc.launchd/launchd.log. Incremental log pull
     (newest 4 tracev3 of Persist/Special + timesync, uuidtext copied from the old archive): research/logs-0102.logarchive.
     SSH install (done, see above): `tools/sweet-ssh-setup.py
