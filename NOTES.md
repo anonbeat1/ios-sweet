@@ -578,6 +578,13 @@ Separate effort from sweet; sweet handoff below is unchanged.
     (sweet-ssh-setup.py too). RESULT (boot ~21:10): still user/501 + exit(1). Cause (guess, 116 cache daemons without
     UserName run as root): SessionCreate. Job now without SessionCreate, LimitLoadToSessionType System; host keys
     pre-generated on the Mac (research/ssh/hostkeys, gitignored) and installed in /var/jb/etc/ssh. Effective next boot.
+    RESULT (boot ~21:13, photo): PANIC "initproc exited -- exit reason namespace 7 subcode 0x1 description: No service
+    cache" right after launchd_cache_loader sent the unsecure cache: launchd REJECTED the cache with the job carrying
+    LimitLoadToSessionType 'System' (string) and no SessionCreate (the UserName-only version had been accepted). iOS
+    cannot boot -> no file server. Recovery: xnu 0103 boot-arg sweetcp=/src:/dst copies a file in bsd_init before
+    launchd (CI 39481496177); boot once with sweetcp=/System/Library/xpc/launchd.plist.pre-ssh:/System/Library/xpc/
+    launchd.plist, then re-add the job WITHOUT LimitLoadToSessionType. Lesson: never edit launchd.plist without a
+    recovery path; test job keys against existing cache jobs first.
     Logs: launchd's own file /private/var/log/com.apple.xpc.launchd/launchd.log. Incremental log pull
     (newest 4 tracev3 of Persist/Special + timesync, uuidtext copied from the old archive): research/logs-0102.logarchive.
     SSH install (done, see above): `tools/sweet-ssh-setup.py
