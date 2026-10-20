@@ -1,0 +1,59 @@
+diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
+index 38c6d9cbf3ec..dd47ad9a7d9f 100644
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -9913,6 +9913,41 @@ sweet_kern_mkdir(const char *path, int mode)
+  */
+ void sweet_boot_copy(void);
+ 
++static void
++sweet_boot_hash(const char *path, char *buf, vfs_context_t ctx)
++{
++	vnode_t vp = NULLVP;
++	uint32_t all = 2166136261u;
++	off_t off = 0;
++	char line[200];
++	size_t len = 0;
++	int err = vnode_open(path, FREAD, 0, 0, &vp, ctx);
++
++	line[0] = '\0';
++	while (err == 0) {
++		int resid = 0;
++		err = vn_rdwr(UIO_READ, vp, buf, 65536, off, UIO_SYSSPACE, IO_NOAUTH,
++		    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++		int n = 65536 - resid;
++		if (err != 0 || n == 0) {
++			break;
++		}
++		uint32_t h = 2166136261u;
++		for (int i = 0; i < n; i++) {
++			h = (h ^ (uint8_t)buf[i]) * 16777619u;
++			all = (all ^ (uint8_t)buf[i]) * 16777619u;
++		}
++		if (len + 10 < sizeof(line)) {
++			len += (size_t)snprintf(line + len, sizeof(line) - len, " %08x", h);
++		}
++		off += n;
++	}
++	if (vp != NULLVP) {
++		vnode_close(vp, FREAD, ctx);
++	}
++	printf("SWEET CP: %s %lld bytes fnv %08x error %d; per 64K:%s\n", path, (long long)off, all, err, line);
++}
++
+ void
+ sweet_boot_copy(void)
+ {
+@@ -9961,8 +9996,11 @@ sweet_boot_copy(void)
+ 	if (svp != NULLVP) {
+ 		vnode_close(svp, FREAD, ctx);
+ 	}
+-	kfree_data(buf, 65536);
+ 	printf("SWEET CP: %s -> %s: %lld bytes, error %d\n", arg, dst, (long long)off, err);
++	/* What a reader now gets from both files: FNV-1a per 64 KiB chunk and whole file. */
++	sweet_boot_hash(arg, buf, ctx);
++	sweet_boot_hash(dst, buf, ctx);
++	kfree_data(buf, 65536);
+ }
+ 
+ /* SWEET: symlink(target, path) with kernel-space strings and the kernel context. */
