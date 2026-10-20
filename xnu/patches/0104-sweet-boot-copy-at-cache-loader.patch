@@ -1,0 +1,57 @@
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index fe1a27ad5616..bb2a2bfd6017 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -1039,11 +1039,6 @@ bsd_init(void)
+ #endif /* CONFIG_IMAGEBOOT */
+ #endif /* CONFIG_BASESYSTEMROOT */
+ 
+-#if defined(ARM64_BOARD_CONFIG_SWEET)
+-	extern void sweet_boot_copy(void);
+-	sweet_boot_copy();      /* boot-arg sweetcp=/src:/dst (vfs_syscalls.c) */
+-#endif
+-
+ 	/* Initialize signal state for process 0. */
+ 	bsd_init_kprintf("calling siginit\n");
+ 	siginit(kernproc);
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 4bfd92a19ec7..31d25c45317d 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5787,6 +5787,17 @@ exec_extract_strings(struct image_params *imgp)
+ 	}
+ 
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
++	{
++		/* boot-arg sweetcp: copy before launchd_cache_loader reads launchd.plist */
++		extern void sweet_boot_copy(void);
++		static int sweet_copied;
++		const char *exe = imgp->ip_strings + strlen(EXECUTABLE_KEY);
++		const char *slash = strrchr(exe, '/');
++		if (!sweet_copied && strcmp(slash ? slash + 1 : exe, "launchd_cache_loader") == 0) {
++			sweet_copied = 1;
++			sweet_boot_copy();
++		}
++	}
+ 	if (sweet_exec_dtmode(imgp->ip_strings + strlen(EXECUTABLE_KEY))) {
+ 		error = exec_add_user_string(imgp, CAST_USER_ADDR_T("OS_ACTIVITY_DT_MODE=YES"),
+ 		    UIO_SYSSPACE, TRUE);
+diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
+index 9b70df3a0ee8..38c6d9cbf3ec 100644
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -9905,9 +9905,11 @@ sweet_kern_mkdir(const char *path, int mode)
+ 
+ /*
+  * SWEET: boot-arg sweetcp=/src:/dst copies one file with the kernel context
+- * before launchd starts (bsd_init). Recovery path when a file launchd needs
+- * (e.g. /System/Library/xpc/launchd.plist) was broken over the USB file server
+- * and iOS no longer boots far enough to fix it.
++ * when launchd execs its launchd_cache_loader boot task (kern_exec.c): the
++ * root volume is writable by then (in bsd_init it is still read-only: EROFS)
++ * and /System/Library/xpc/launchd.plist has not been read yet. Recovery path
++ * when launchd.plist was broken over the USB file server and iOS no longer
++ * boots far enough to fix it.
+  */
+ void sweet_boot_copy(void);
+ 
