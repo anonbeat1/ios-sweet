@@ -557,6 +557,8 @@ Separate effort from sweet; sweet handoff below is unchanged.
     extension point cache; SSH installed (`sweet-ssh-setup.py`, 6584 entries, launchd.plist 795488 bytes, backup
     research/launchd.plist.pre-ssh + phone .pre-ssh). Takes effect at the next boot: then `ssh -i research/ssh/id_ed25519
     root@192.168.7.2`.
+    **MILESTONE (2026-10-20 ~20:55, same boot): SAFARI RENDERS PAGES** (user: "riesco a vedere le immagini su safari") after
+    the sRGB /product gamut fix (WebKit.GPU BGRA surfaces instead of b3a8/w30r).
     **MILESTONE (2026-10-20 ~20:50, boot 1F6EB8FC, 0102 + sweet-0102sw.adt): WALLPAPER VISIBLE** (user: "vedo lo sfondo").
     lsd rebuilt the LS database on that boot (seeding started ~105 s after boot, ~2.4 s per bundle, >237 bundles in
     9.5 min; the Apple logo stays until it finishes) and logged "Registering extension point: com.apple.posterkit.provider
