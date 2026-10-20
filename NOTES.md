@@ -652,7 +652,15 @@ Separate effort from sweet; sweet handoff below is unchanged.
     cmdline of 0106 + sweetfb_scale=2). BOOTED 2026-10-20 ~23:57: "presented as 750x1624", no crash; user: "more fluid,
     sharpness not great but OK". backboardd while animating ~160-245% (was ~450%). ReportCrash again 65-135% right
     after boot (more crashes than mediaserverd at boot). Fallback: spacewar-xnu-0106-normal.img (scale 3).
-    Ideas: 3/2 linear filter instead of nearest neighbour for sharpness (cheap: output pixel 1 of 3 = average of 2). GPU research: iOS GLES is GL-over-Metal
+    Ideas: 3/2 linear filter instead of nearest neighbour for sharpness (cheap: output pixel 1 of 3 = average of 2).
+    ReportCrash DISABLED (user OK): `launchctl disable system/com.apple.ReportCrash` (undo: enable). Crashes still show as
+    kernel "CRASH name ..." lines in the USB log; no new .ips files.
+    Messages (MobileSMS) crash: SIGSEGV at pc 0 in CI::GLContext::GLContext <- +[CIContext internalContextWithEAGLContext:]
+    <- -[CIContext initWithOptions:] <- MobileIcons _MI_sharedIconCompositorContext / LICGImageCreateCoreImageLanczosScaled
+    (icon compositing). iOS 16 CoreImage has only CI::GLContext and CI::MetalContext (no CPU context); initWithOptions
+    checks _CIGLIsUsable and then even drops "software_renderer". So every CoreImage user crashes without a GPU (Photos
+    too, likely). Possible fix: a tweak (DYLD_INSERT via the AMFI dyld-policy bits we control) replacing MobileIcons'
+    CoreImage Lanczos scaling with CoreGraphics, or making CIContext creation fail cleanly. GPU research: iOS GLES is GL-over-Metal
       (AppleMetalGLRenderer.bundle; GPU driver AGXMetalA11.bundle); QuartzCore still has CA::OGL::GLESContext and
       CA_ENABLE_OGL; no Metal-over-Vulkan layer exists (only Vulkan-over-Metal). Plan: check whether blur is missing because
       UIKit/MobileGestalt disable it (CA::OGL generic GaussianBlurFilter exists) before anything GPU. Shell PATH: /var/jb/usr/bin:/var/jb/bin:/var/jb/usr/sbin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin.
