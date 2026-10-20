@@ -265,6 +265,12 @@ def build(seed=None, qemu=False, highmem=False, spacewar=False, ft_fw=None):
     ])
 
     product_props = d22ap_product()
+    if product_props:
+        # D22AP says P3: MobileGestalt HasExtendedColorDisplay = gamut == "P3", and
+        # WebKit then renders into 10-bit IOSurfaces ('b3a8'/'w30r') that the
+        # CPU renderer cannot draw; Safari showed no page content. sRGB = 8-bit BGRA.
+        product_props = [(k, cstr('sRGB') if k == 'artwork-display-gamut' else v)
+                         for k, v in product_props]
     product = [node('product', [ph()] + product_props)] if product_props else []
 
     # Identity of the iPhone X whose userland runs here: compatible[0] is
