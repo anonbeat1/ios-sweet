@@ -22,31 +22,68 @@ echo "waiting for the phone's USB Ethernet..." >&2
 ifname=""
 while [ -z "$ifname" ]; do ifname=$(find_if || true); [ -z "$ifname" ] && sleep 1; done
 echo "interface: $ifname" >&2
+up_cmd="/sbin/ifconfig $ifname inet 192.168.7.1 netmask 255.255.255.0 up"
 if [ -t 0 ]; then
-	sudo ifconfig "$ifname" inet 192.168.7.1 netmask 255.255.255.0 up
+	sudo $up_cmd
+	# keep the sudo ticket alive so the address can be re-applied without a prompt
+	( while sudo -n -v 2>/dev/null; do sleep 60; done ) &
+	reup="sudo -n $up_cmd"
 else
 	# no terminal (e.g. Claude Code's ! prompt): macOS admin-password dialog instead of sudo
-	osascript -e "do shell script \"/sbin/ifconfig $ifname inet 192.168.7.1 netmask 255.255.255.0 up\" with administrator privileges"
+	osascript -e "do shell script \"$up_cmd\" with administrator privileges"
+	reup="osascript -e 'do shell script \"$up_cmd\" with administrator privileges'"
 fi
 echo "$ifname up: 192.168.7.1 <-> phone 192.168.7.2" >&2
-# share the Mac's internet to the phone (optional): enable IP forwarding + a
-# pf NAT rule on the uplink. Left to the user; link-local works without it.
+# share the Mac's internet to the phone (optional): tools/sweet-nat-macos.sh on.
 echo "live kernel log on udp/5140 (ctrl-C to stop)" >&2
-# BSD nc's UDP listener binds to the first peer; use a plain UDP socket.
-LOGFILE="${1:-}" exec /usr/bin/python3 - <<'PY'
-import os, socket, sys
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(("192.168.7.1", 5140))
-# hello: the phone (patch 0096) starts streaming once it hears from 192.168.7.1
-for _ in range(3):
-    try:
-        s.sendto(b"hello", ("192.168.7.2", 5140))
-    except OSError:
-        pass
+# The phone re-enumerates on every reboot and macOS then drops 192.168.7.1 (the
+# interface falls back to 169.254.x), and the phone's kernel only streams after
+# it hears a hello (patch 0096). So: re-apply the address when it disappears and
+# send a hello whenever nothing arrived for a few seconds.
+IFNAME="$ifname" REUP="$reup" LOGFILE="${1:-}" exec /usr/bin/python3 - <<'PY'
+import os, socket, subprocess, sys, time
+ifname, reup = os.environ["IFNAME"], os.environ["REUP"]
 logf = open(os.environ["LOGFILE"], "ab") if os.environ.get("LOGFILE") else None
+
+def has_addr():
+    out = subprocess.run(["/sbin/ifconfig", ifname], capture_output=True, text=True).stdout
+    return "inet 192.168.7.1 " in out
+
+s = None
+last = 0.0
 while True:
-    data, _ = s.recvfrom(65535)
+    if not has_addr():
+        if s:
+            s.close()
+            s = None
+        print("192.168.7.1 lost on %s, re-applying" % ifname, file=sys.stderr)
+        subprocess.run(reup, shell=True)
+        time.sleep(1)
+        continue
+    if s is None:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("192.168.7.1", 5140))
+            s.settimeout(2)
+        except OSError:
+            s = None
+            time.sleep(1)
+            continue
+    if time.time() - last > 5:
+        try:
+            s.sendto(b"hello", ("192.168.7.2", 5140))
+        except OSError:
+            pass
+    try:
+        data, _ = s.recvfrom(65535)
+    except socket.timeout:
+        continue
+    except OSError:
+        s.close()
+        s = None
+        continue
+    last = time.time()
     sys.stdout.buffer.write(data); sys.stdout.buffer.flush()
     if logf:
         logf.write(data); logf.flush()
