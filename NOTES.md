@@ -625,6 +625,12 @@ Separate effort from sweet; sweet handoff below is unchanged.
       "firmware" virtual package 16.7.16, pwd_mkdb, postinsts, chsh zsh); removed shshd libdimentio0 libkrw0 (jailbreak-only,
       libkrw0 needed a kernel r/w plugin); `apt-get install org.coolstar.sileo` (2.5.1, from the Procursus 1900 repo itself,
       no extra repo/key); registered: `uicache -l` -> org.coolstar.SileoStore /private/var/jb/Applications/Sileo.app.
+      First launch: SIGTRAP, Swift fatalError "Database Connection failed" (Sileo/Backend/DatabaseManager.swift: cache dir
+      = "/var/jb" + Library path, createDirectory with a data-protection class, then SQLite open). Cause: the file-server
+      untar created everything as root, but the tar wants ./var/jb/var/mobile owned 501:501 (the only non-root entry).
+      `chown -R 501:501 /var/jb/var/mobile` -> **SILEO OPENS** (user, ~22:50). TODO: sweet-pull.py untar has no chown.
+      Also: our HFS has no data-protection classes (SQLite logs "volume does not support data protection"); apps that
+      require F_SETPROTECTIONCLASS to succeed may fail.
       Downloads to the phone are ~4-5 KB/s (apt index 342 kB in 83 s) while phone->Mac is ~1 MB/s: suspect the USB gadget
       RX path (one OUT buffer re-armed per poll) - next to fix. GPU research: iOS GLES is GL-over-Metal
       (AppleMetalGLRenderer.bundle; GPU driver AGXMetalA11.bundle); QuartzCore still has CA::OGL::GLESContext and
