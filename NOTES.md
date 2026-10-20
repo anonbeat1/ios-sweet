@@ -585,6 +585,10 @@ Separate effort from sweet; sweet handoff below is unchanged.
     launchd (CI 39481496177); boot once with sweetcp=/System/Library/xpc/launchd.plist.pre-ssh:/System/Library/xpc/
     launchd.plist, then re-add the job WITHOUT LimitLoadToSessionType. Lesson: never edit launchd.plist without a
     recovery path; test job keys against existing cache jobs first.
+    0103 restore image still panicked (photo 21:22): the copy ran in bsd_init while root was still read-only (launchd's
+    `mount`/`mount_hfs` boot tasks remount it before `exec launchd_cache_loader`; 0099 log lines 417-656). xnu 0104 runs
+    sweetcp once at the exec of launchd_cache_loader (kern_exec.c) instead (CI 39483322833 -> xnu/out-0104). Images:
+    shim/out/spacewar-xnu-0104-restore-launchd.img (sweetcp .pre-ssh -> launchd.plist) and spacewar-xnu-0104.img (normal).
     Logs: launchd's own file /private/var/log/com.apple.xpc.launchd/launchd.log. Incremental log pull
     (newest 4 tracev3 of Persist/Special + timesync, uuidtext copied from the old archive): research/logs-0102.logarchive.
     SSH install (done, see above): `tools/sweet-ssh-setup.py
