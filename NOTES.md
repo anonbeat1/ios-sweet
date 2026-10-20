@@ -604,6 +604,24 @@ Separate effort from sweet; sweet handoff below is unchanged.
     panic was the same thing (removing SessionCreate made launchd.plist shorter); LimitLoadToSessionType was NOT the cause
     (my earlier guess was wrong). xnu 0106: sweet_vnode_set_size() (vnode_setattr va_data_size) after every kernel write
     (CI 39486765287). Files written over the file server so far: only launchd.plist was ever rewritten shorter.
+    0106-restore (photo ~22:01): copy now exact (dst 795217 bytes fnv 57d344be) but STILL "No service cache"; 0106-normal
+    (no sweetcp) BOOTS with that same file. So running sweetcp inside the exec of launchd_cache_loader breaks the loader
+    (mechanism not understood). sweetcp must move to an earlier exec (e.g. prng_seedctl, after mount) before reuse.
+    **MILESTONE (2026-10-20 ~22:12): SSH WORKS.** `ssh -i research/ssh/id_ed25519 root@192.168.7.2` (or password alpine):
+    uid=0, "iPhone OS 16.7.16 20H392", Darwin 22.6.0 iPhone10,3, 236 processes, / = /dev/ufsroot0 16Gi (12Gi used).
+    Image shim/out/spacewar-xnu-0106-normal.img. What it took after the panics:
+    - launchd.plist job copied from the cache's own inetd job com.apple.ftp-proxy-embedded (Sockets.Listeners stream
+      "22", inetdCompatibility Wait false, UserName root, GroupName wheel, no SessionCreate); key
+      /System/Library/LaunchDaemons/com.openssh.sshd.plist (jobs keyed under /var/jb were ignored). Port 22 up ~55 s.
+    - sshd said "Invalid user root": Procursus libiosexec ie_getpwnam reads /var/jb/etc/pwd.db/spwd.db, created by the
+      bootstrap postinst (pwd_mkdb -p), which never ran. tools/sshd-keygen-wrapper.sh (installed as
+      /var/jb/usr/libexec/sshd-keygen-wrapper, run as root by launchd per connection) now runs pwd_mkdb, copies
+      etc/shells and root's authorized_keys into /var/jb/var/root/.ssh (Procursus root home), and starts sshd with
+      -E /var/jb/tmp/sshd.log. /var/jb/etc/master.passwd root = /smx7MYTQIi2M (alpine; Procursus ships "!").
+      sshd_config: UsePAM no (backup research/ssh/sshd_config.orig). The wrapper is also a way to run any command as
+      root at the next ssh connection.
+    - tools/sweet-usbnet-macos.sh now re-applies 192.168.7.1 after phone reboots and re-sends hello (pass the log file
+      as argument). Shell PATH: /var/jb/usr/bin:/var/jb/bin:/var/jb/usr/sbin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin.
     Logs: launchd's own file /private/var/log/com.apple.xpc.launchd/launchd.log. Incremental log pull
     (newest 4 tracev3 of Persist/Special + timesync, uuidtext copied from the old archive): research/logs-0102.logarchive.
     SSH install (done, see above): `tools/sweet-ssh-setup.py

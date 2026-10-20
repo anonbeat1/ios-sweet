@@ -5,6 +5,13 @@ on the phone over the kernel file server (xnu 0101), then:
 
   sweet-ssh-setup.py BOOTSTRAP.tar.zst PUBKEY
 
+Inside /var/jb it also replaces usr/libexec/sshd-keygen-wrapper with
+tools/sshd-keygen-wrapper.sh, which runs the Procursus postinst steps sshd
+needs on the first connection (pwd_mkdb -p: libiosexec's getpwnam reads
+/var/jb/etc/pwd.db, without it sshd says "Invalid user root"; etc/shells; root's
+authorized_keys in /var/jb/var/root/.ssh), and gives root the iOS default
+password (alpine, DES hash as in /etc/master.passwd; Procursus ships it locked).
+
 Changes outside /var/jb: /bin/sh -> /var/jb/bin/sh (root's login shell, absent
 on iOS), /var/root/.ssh/authorized_keys, and an sshd job (port 22) added to
 /System/Library/xpc/launchd.plist (read unsigned with launchd_unsecure_cache=1).
@@ -42,6 +49,14 @@ JOB = {
 
 def main(bootstrap, pubkey):
     pull.untar(bootstrap)
+    here_wrapper = os.path.join(here, 'sshd-keygen-wrapper.sh')
+    pull.put(open(here_wrapper, 'rb').read(), '/var/jb/usr/libexec/sshd-keygen-wrapper', 0o755)
+    mp = os.path.join(here, '..', 'research', 'master.passwd.phone')
+    pull.get('/var/jb/etc/master.passwd', mp)
+    lines = open(mp).read().splitlines(True)
+    lines = [':'.join([l.split(':')[0], '/smx7MYTQIi2M'] + l.split(':')[2:]) if l.startswith('root:') else l
+             for l in lines]
+    pull.put(''.join(lines).encode(), '/var/jb/etc/master.passwd', 0o600)
     pull.command('SYMLINK /bin/sh /var/jb/bin/sh')
     pull.command('MKDIR 700 /var/root/.ssh')
     pull.put(open(pubkey, 'rb').read(), '/var/root/.ssh/authorized_keys', 0o600)
