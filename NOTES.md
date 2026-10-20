@@ -575,7 +575,10 @@ Separate effort from sweet; sweet handoff below is unchanged.
     effective next boot. RESULT (boot ~21:05): port 22 opens ~110 s after boot (launchd now loads the job), but ssh gets
     "Connection reset": launchd.log shows user/501/com.openssh.sshd.* spawning sh, exit(1) - iOS runs cache
     LaunchDaemons as mobile without UserName. Phone launchd.plist job now has UserName root / GroupName wheel
-    (sweet-ssh-setup.py too); effective next boot. Logs: launchd's own file /private/var/log/com.apple.xpc.launchd/launchd.log. Incremental log pull
+    (sweet-ssh-setup.py too). RESULT (boot ~21:10): still user/501 + exit(1). Cause (guess, 116 cache daemons without
+    UserName run as root): SessionCreate. Job now without SessionCreate, LimitLoadToSessionType System; host keys
+    pre-generated on the Mac (research/ssh/hostkeys, gitignored) and installed in /var/jb/etc/ssh. Effective next boot.
+    Logs: launchd's own file /private/var/log/com.apple.xpc.launchd/launchd.log. Incremental log pull
     (newest 4 tracev3 of Persist/Special + timesync, uuidtext copied from the old archive): research/logs-0102.logarchive.
     SSH install (done, see above): `tools/sweet-ssh-setup.py
     research/procursus/bootstrap-ssh-1900.tar.zst research/ssh/id_ed25519.pub` = Procursus rootless 1900 bootstrap into
