@@ -1,0 +1,249 @@
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index 815d5206abe8..ab11e9f943b9 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -40,6 +40,8 @@
+ #include <sys/vnode.h>
+ #include <sys/fcntl.h>
+ #include <net/bpf.h>
++#include <sys/dirent.h>
++#include <sys/uio.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ void sweet_usb_probe(void);
+@@ -1078,6 +1080,224 @@ out:
+ 	thread_block(THREAD_CONTINUE_NULL);
+ }
+ 
++/*
++ * Read-only file server for the host, so logd's files (and other state) can
++ * be read without a shell: TCP 192.168.7.2:5141, one request per connection,
++ * a line "LS <dir>" or "GET <file>".
++ *   LS  -> "OK\n" then "<d|f|l|?> <size> <name>\n" per entry, connection closed.
++ *   GET -> "OK <size>\n" then the bytes, connection closed.
++ *   error -> "ERR <errno>\n".
++ * Files are read as the kernel (no permission checks); only reachable over the
++ * USB link. Host side: tools/sweet-pull.py. Boot-arg sweetfs=0 disables it.
++ */
++#define UD_FS_PORT      5141
++
++static int
++ud_fs_send(socket_t so, const void *buf, size_t len)
++{
++	while (len > 0) {
++		struct iovec iov = { .iov_base = (void *)(uintptr_t)buf, .iov_len = len };
++		struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1 };
++		size_t sent = 0;
++		int err = sock_send(so, &msg, 0, &sent);
++		if (err != 0) {
++			return err;
++		}
++		if (sent == 0) {
++			return EPIPE;
++		}
++		buf = (const char *)buf + sent;
++		len -= sent;
++	}
++	return 0;
++}
++
++static int
++ud_fs_printf(socket_t so, const char *fmt, ...)
++{
++	char line[MAXPATHLEN + 64];
++	va_list ap;
++	va_start(ap, fmt);
++	int n = vsnprintf(line, sizeof(line), fmt, ap);
++	va_end(ap);
++	return ud_fs_send(so, line, MIN((size_t)n, sizeof(line) - 1));
++}
++
++static void
++ud_fs_ls(socket_t so, const char *path, vfs_context_t ctx)
++{
++	static char dbuf[8192];
++	static char child[MAXPATHLEN];
++	vnode_t vp = NULLVP;
++	int err = vnode_open(path, FREAD, 0, 0, &vp, ctx);
++	if (err == 0 && vnode_vtype(vp) != VDIR) {
++		vnode_close(vp, FREAD, ctx);
++		err = ENOTDIR;
++	}
++	if (err != 0) {
++		(void)ud_fs_printf(so, "ERR %d\n", err);
++		return;
++	}
++	if (ud_fs_send(so, "OK\n", 3) != 0) {
++		goto out;
++	}
++	off_t off = 0;
++	for (;;) {
++		int eof = 0, num = 0;
++		uio_t uio = uio_create(1, off, UIO_SYSSPACE, UIO_READ);
++		if (uio == NULL) {
++			break;
++		}
++		uio_addiov(uio, CAST_USER_ADDR_T(dbuf), sizeof(dbuf));
++		err = VNOP_READDIR(vp, uio, 0, &eof, &num, ctx);
++		size_t got = sizeof(dbuf) - (size_t)uio_resid(uio);
++		off = uio_offset(uio);
++		uio_free(uio);
++		if (err != 0 || got == 0) {
++			break;
++		}
++		for (size_t pos = 0; pos + offsetof(struct dirent, d_name) < got;) {
++			struct dirent *de = (struct dirent *)(void *)(dbuf + pos);
++			if (de->d_reclen == 0) {
++				break;
++			}
++			pos += de->d_reclen;
++			if (de->d_ino == 0 ||
++			    (de->d_namlen == 1 && de->d_name[0] == '.') ||
++			    (de->d_namlen == 2 && de->d_name[0] == '.' && de->d_name[1] == '.')) {
++				continue;
++			}
++			char t = de->d_type == DT_DIR ? 'd' : de->d_type == DT_REG ? 'f' :
++			    de->d_type == DT_LNK ? 'l' : '?';
++			off_t size = 0;
++			if (t == 'f') {
++				vnode_t cvp = NULLVP;
++				snprintf(child, sizeof(child), "%s/%.*s", path, de->d_namlen, de->d_name);
++				if (vnode_lookup(child, 0, &cvp, ctx) == 0) {
++					(void)vnode_size(cvp, &size, ctx);
++					vnode_put(cvp);
++				}
++			}
++			if (ud_fs_printf(so, "%c %lld %.*s\n", t, (long long)size, de->d_namlen, de->d_name) != 0) {
++				goto out;
++			}
++		}
++		if (eof) {
++			break;
++		}
++	}
++out:
++	vnode_close(vp, FREAD, ctx);
++}
++
++static void
++ud_fs_get(socket_t so, const char *path, vfs_context_t ctx)
++{
++	static char fbuf[65536];
++	vnode_t vp = NULLVP;
++	off_t size = 0;
++	int err = vnode_open(path, FREAD, 0, 0, &vp, ctx);
++	if (err == 0 && vnode_vtype(vp) != VREG) {
++		vnode_close(vp, FREAD, ctx);
++		err = EISDIR;
++	}
++	if (err == 0 && (err = vnode_size(vp, &size, ctx)) != 0) {
++		vnode_close(vp, FREAD, ctx);
++	}
++	if (err != 0) {
++		(void)ud_fs_printf(so, "ERR %d\n", err);
++		return;
++	}
++	/* The size is fixed when the request is answered; a growing file is cut there. */
++	if (ud_fs_printf(so, "OK %lld\n", (long long)size) == 0) {
++		for (off_t off = 0; off < size;) {
++			int len = (int)MIN((off_t)sizeof(fbuf), size - off), resid = 0;
++			err = vn_rdwr(UIO_READ, vp, fbuf, len, off, UIO_SYSSPACE, IO_NOAUTH,
++			    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++			if (err != 0) {
++				break;
++			}
++			if (resid == len) {
++				bzero(fbuf, (size_t)len);       /* file shrank: pad to the announced size */
++				resid = 0;
++			}
++			if (ud_fs_send(so, fbuf, (size_t)(len - resid)) != 0) {
++				break;
++			}
++			off += len - resid;
++		}
++	}
++	vnode_close(vp, FREAD, ctx);
++}
++
++static void
++ud_fs_thread(void *arg __unused, wait_result_t wr __unused)
++{
++	static char req[MAXPATHLEN + 8];
++	vfs_context_t ctx = vfs_context_kernel();
++	socket_t ls = NULL;
++	struct sockaddr_in sin;
++	int on = 1;
++
++	while (rootvnode == NULLVP) {
++		ud_sleep_ms(500);
++	}
++	bzero(&sin, sizeof(sin));
++	sin.sin_len = sizeof(sin);
++	sin.sin_family = AF_INET;
++	sin.sin_port = htons(UD_FS_PORT);
++	sin.sin_addr.s_addr = htonl(0xc0a80702);        /* 192.168.7.2: only the USB link */
++	for (int i = 0; i < 120; i++) {
++		if (ls == NULL && sock_socket(PF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, NULL, &ls) != 0) {
++			ls = NULL;
++		}
++		if (ls != NULL) {
++			(void)sock_setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
++			if (sock_bind(ls, (struct sockaddr *)&sin) == 0 && sock_listen(ls, 4) == 0) {
++				break;
++			}
++		}
++		ud_sleep_ms(1000);      /* the address may not be configured yet */
++	}
++	printf("SWEET FS: file server on 192.168.7.2:%d %s\n", UD_FS_PORT, ls ? "listening" : "FAILED");
++	for (;;) {
++		socket_t cs = NULL;
++		if (ls == NULL || sock_accept(ls, NULL, 0, 0, NULL, NULL, &cs) != 0) {
++			ud_sleep_ms(1000);
++			continue;
++		}
++		struct timeval tv = { .tv_sec = 10, .tv_usec = 0 };
++		(void)sock_setsockopt(cs, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
++		(void)sock_setsockopt(cs, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
++		size_t have = 0;
++		bool line = false;
++		while (have < sizeof(req) - 1 && !line) {
++			struct iovec iov = { .iov_base = req + have, .iov_len = sizeof(req) - 1 - have };
++			struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1 };
++			size_t got = 0;
++			if (sock_receive(cs, &msg, 0, &got) != 0 || got == 0) {
++				break;
++			}
++			for (size_t i = have; i < have + got; i++) {
++				if (req[i] == '\n' || req[i] == '\r') {
++					req[i] = '\0';
++					line = true;
++					break;
++				}
++			}
++			have += got;
++		}
++		if (line && strncmp(req, "LS /", 4) == 0) {
++			ud_fs_ls(cs, req + 3, ctx);
++		} else if (line && strncmp(req, "GET /", 5) == 0) {
++			ud_fs_get(cs, req + 4, ctx);
++		} else {
++			(void)ud_fs_printf(cs, "ERR %d\n", EINVAL);
++		}
++		sock_close(cs);
++	}
++}
++
+ static void
+ sweet_usb_gadget_start(vm_offset_t dwc)
+ {
+@@ -1188,5 +1408,10 @@ sweet_usb_gadget_start(vm_offset_t dwc)
+ 	if (livelog && ud.ifp != NULL && kernel_thread_start(ud_log_thread, NULL, &thread) == KERN_SUCCESS) {
+ 		thread_deallocate(thread);
+ 	}
++	int fs = 1;
++	PE_parse_boot_argn("sweetfs", &fs, sizeof(fs));
++	if (fs && ud.ifp != NULL && kernel_thread_start(ud_fs_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	}
+ }
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
