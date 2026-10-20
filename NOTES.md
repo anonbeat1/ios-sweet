@@ -462,6 +462,18 @@ Separate effort from sweet; sweet handoff below is unchanged.
     updatePreConfiguredConfiguration() needs SCNetworkSetCopyCurrent(prefs) (an existing current set); this fresh image with
     no Wi-Fi/cellular may have none. Next: image `shim/out/spacewar-xnu-0094-iolog.img` (= 0094-daily + sweetiolog=configd)
     to see configd's IOKit calls (does PreferencesMonitor look ue0 up by BSD name = findInterfaces ran?).
+    **0094-iolog boot (17:54, `logs/spacewar-0094-iolog.txt`)**: configd IOKit trace: IONetworkStack open OK, IOServiceFirstMatch
+    IONetworkInterface -> IOEthernetInterface (entry 0x100000138), then repeated `BSD Name` lookups ue0 -> 1 found, stf0 -> 0
+    found. So configd's SCNetworkInterface layer resolves ue0, yet no service gets applied.
+    The original root image (mounted read-only on the Mac: `hdiutil attach -readonly -imagekey diskimage-class=CRawDiskImage`)
+    has /Library/Preferences -> ../private/var/preferences containing only Logging: **no SystemConfiguration dir, no
+    preferences.plist**. configd creates its prefs only after InterfaceNamer reports IOKit quiet; with no current set,
+    PreferencesMonitor cannot add the (pre-configured) ue0 service. **xnu 0095** (`0095-sweet-network-prefs.patch`, on 0094):
+    `sweet_kern_mkdir()` (vfs_syscalls.c: mkdir1at with UIO_SYSSPACE + kernel context) and a sweet_usb.c thread that waits for
+    rootvnode, then creates /private/var/preferences/SystemConfiguration and writes preferences.plist (CurrentSet + one
+    service: Interface DeviceName ue0 Type/Hardware Ethernet, IPv4 Manual 192.168.7.2/24 router 192.168.7.1, IPv6 Automatic,
+    DNS 1.1.1.1/8.8.8.8, __VERSION__ 20191120; plutil-validated) unless the existing file already contains ue0. Logs
+    "SWEET NET: wrote ... / already configures ue0 / writing ... failed".
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON

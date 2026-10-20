@@ -1,0 +1,186 @@
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index b8f010d4ddb0..0dce94ea8c6f 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -37,12 +37,17 @@
+ #include <net/dlil.h>
+ #include <sys/kern_event.h>
+ #include <pexpert/device_tree.h>
++#include <sys/vnode.h>
++#include <sys/fcntl.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ void sweet_usb_probe(void);
+ static void sweet_usb_gadget_start(vm_offset_t dwc);
+ extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
+ extern int sweet_smmu_map_sid(unsigned sid);
++extern int sweet_kern_mkdir(const char *path, int mode);
++extern struct vnode *rootvnode;
++extern kern_return_t thread_terminate(thread_t);
+ extern void sweet_net_publish(const char *bsd_name, const char *prefix, unsigned unit,
+     const uint8_t *mac, const char *ip, const char *mask, const char *router,
+     const char *dns1, const char *dns2);
+@@ -921,6 +926,125 @@ ud_log_thread(void *arg __unused, wait_result_t wr __unused)
+ 	}
+ }
+ 
++
++/*
++ * configd only creates its network preferences after InterfaceNamer reports
++ * IOKit quiet, and the iOS root image ships without
++ * /private/var/preferences/SystemConfiguration: with no current set,
++ * PreferencesMonitor has nowhere to add the ue0 service (0092-0094 boots: the
++ * IOKit interface is found, no address/route is ever applied). Write a minimal
++ * preferences.plist with one set and one manual-IPv4 Ethernet service for ue0
++ * before configd starts, unless the file already mentions ue0.
++ */
++#define UD_PREFS_DIR    "/private/var/preferences/SystemConfiguration"
++#define UD_PREFS_FILE   UD_PREFS_DIR "/preferences.plist"
++
++static const char ud_prefs_plist[] =
++    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
++    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
++    "<plist version=\"1.0\">\n<dict>\n"
++    "\t<key>CurrentSet</key>\n\t<string>/Sets/5357454554-SET</string>\n"
++    "\t<key>NetworkServices</key>\n\t<dict>\n"
++    "\t\t<key>5357454554-UE0</key>\n\t\t<dict>\n"
++    "\t\t\t<key>DNS</key>\n\t\t\t<dict>\n"
++    "\t\t\t\t<key>ServerAddresses</key>\n\t\t\t\t<array><string>1.1.1.1</string><string>8.8.8.8</string></array>\n"
++    "\t\t\t</dict>\n"
++    "\t\t\t<key>IPv4</key>\n\t\t\t<dict>\n"
++    "\t\t\t\t<key>Addresses</key>\n\t\t\t\t<array><string>192.168.7.2</string></array>\n"
++    "\t\t\t\t<key>ConfigMethod</key>\n\t\t\t\t<string>Manual</string>\n"
++    "\t\t\t\t<key>Router</key>\n\t\t\t\t<string>192.168.7.1</string>\n"
++    "\t\t\t\t<key>SubnetMasks</key>\n\t\t\t\t<array><string>255.255.255.0</string></array>\n"
++    "\t\t\t</dict>\n"
++    "\t\t\t<key>IPv6</key>\n\t\t\t<dict>\n\t\t\t\t<key>ConfigMethod</key>\n\t\t\t\t<string>Automatic</string>\n\t\t\t</dict>\n"
++    "\t\t\t<key>Interface</key>\n\t\t\t<dict>\n"
++    "\t\t\t\t<key>DeviceName</key>\n\t\t\t\t<string>ue0</string>\n"
++    "\t\t\t\t<key>Hardware</key>\n\t\t\t\t<string>Ethernet</string>\n"
++    "\t\t\t\t<key>Type</key>\n\t\t\t\t<string>Ethernet</string>\n"
++    "\t\t\t\t<key>UserDefinedName</key>\n\t\t\t\t<string>USB Ethernet</string>\n"
++    "\t\t\t</dict>\n"
++    "\t\t\t<key>UserDefinedName</key>\n\t\t\t<string>USB Ethernet</string>\n"
++    "\t\t</dict>\n\t</dict>\n"
++    "\t<key>Sets</key>\n\t<dict>\n"
++    "\t\t<key>5357454554-SET</key>\n\t\t<dict>\n"
++    "\t\t\t<key>Network</key>\n\t\t\t<dict>\n"
++    "\t\t\t\t<key>Global</key>\n\t\t\t\t<dict>\n"
++    "\t\t\t\t\t<key>IPv4</key>\n\t\t\t\t\t<dict>\n"
++    "\t\t\t\t\t\t<key>ServiceOrder</key>\n\t\t\t\t\t\t<array><string>5357454554-UE0</string></array>\n"
++    "\t\t\t\t\t</dict>\n\t\t\t\t</dict>\n"
++    "\t\t\t\t<key>Service</key>\n\t\t\t\t<dict>\n"
++    "\t\t\t\t\t<key>5357454554-UE0</key>\n\t\t\t\t\t<dict>\n"
++    "\t\t\t\t\t\t<key>__LINK__</key>\n\t\t\t\t\t\t<string>/NetworkServices/5357454554-UE0</string>\n"
++    "\t\t\t\t\t</dict>\n\t\t\t\t</dict>\n"
++    "\t\t\t</dict>\n"
++    "\t\t\t<key>UserDefinedName</key>\n\t\t\t<string>Automatic</string>\n"
++    "\t\t</dict>\n\t</dict>\n"
++    "\t<key>__VERSION__</key>\n\t<integer>20191120</integer>\n"
++    "</dict>\n</plist>\n";
++
++/* 1: the file already names ue0, 0: absent or without it, <0: error */
++static int
++ud_prefs_has_ue0(vfs_context_t ctx)
++{
++	vnode_t vp = NULLVP;
++	static char buf[65536];
++	int resid = 0;
++
++	if (vnode_open(UD_PREFS_FILE, FREAD, 0, 0, &vp, ctx) != 0) {
++		return 0;
++	}
++	int err = vn_rdwr(UIO_READ, vp, buf, sizeof(buf) - 1, 0, UIO_SYSSPACE, IO_NOAUTH,
++	    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++	vnode_close(vp, FREAD, ctx);
++	if (err != 0) {
++		return -1;
++	}
++	size_t n = sizeof(buf) - 1 - (size_t)resid;
++	buf[n] = 0;
++	return strnstr(buf, "<string>ue0</string>", n) != NULL ? 1 : 0;
++}
++
++static void
++ud_prefs_thread(void *arg __unused, wait_result_t wr __unused)
++{
++	vfs_context_t ctx = vfs_context_kernel();
++
++	for (int i = 0; i < 600 && rootvnode == NULLVP; i++) {
++		ud_sleep_ms(100);
++	}
++	if (rootvnode == NULLVP) {
++		printf("SWEET NET: no root after 60 s; network prefs not written\n");
++		goto out;
++	}
++	for (int attempt = 0; attempt < 30; attempt++) {
++		int has = ud_prefs_has_ue0(ctx);
++		if (has == 1) {
++			printf("SWEET NET: %s already configures ue0\n", UD_PREFS_FILE);
++			goto out;
++		}
++		(void)sweet_kern_mkdir("/private/var/preferences", 0755);
++		(void)sweet_kern_mkdir(UD_PREFS_DIR, 0755);
++		vnode_t vp = NULLVP;
++		int err = vnode_open(UD_PREFS_FILE, O_CREAT | O_TRUNC | FWRITE, 0644, 0, &vp, ctx);
++		if (err == 0) {
++			int resid = 0;
++			err = vn_rdwr(UIO_WRITE, vp, (caddr_t)(uintptr_t)ud_prefs_plist,
++			    (int)(sizeof(ud_prefs_plist) - 1), 0, UIO_SYSSPACE, IO_NOAUTH | IO_SYNC,
++			    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++			vnode_close(vp, FWRITE, ctx);
++			if (err == 0 && resid == 0) {
++				printf("SWEET NET: wrote %s (set + manual ue0 service, %u bytes)\n",
++				    UD_PREFS_FILE, (unsigned)(sizeof(ud_prefs_plist) - 1));
++				goto out;
++			}
++		}
++		printf("SWEET NET: writing %s failed (%d), retrying\n", UD_PREFS_FILE, err);
++		ud_sleep_ms(1000);      /* e.g. root still read-only */
++	}
++out:
++	(void)thread_terminate(current_thread());
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
+ static void
+ sweet_usb_gadget_start(vm_offset_t dwc)
+ {
+@@ -958,6 +1082,10 @@ sweet_usb_gadget_start(vm_offset_t dwc)
+ 	if (netcfg && ud.ifp != NULL) {
+ 		sweet_net_publish("ue0", "ue", 0, ud_phone_mac, "192.168.7.2", "255.255.255.0",
+ 		    "192.168.7.1", "1.1.1.1", "8.8.8.8");
++		thread_t pt;
++		if (kernel_thread_start(ud_prefs_thread, NULL, &pt) == KERN_SUCCESS) {
++			thread_deallocate(pt);
++		}
+ 	}
+ 	printf("SWEET USB: ue0 created; GCTL 0x%08x DCTL 0x%08x DSTS 0x%08x before reset\n",
+ 	    dwc_rd(GCTL), dwc_rd(DCTL), dwc_rd(DSTS));
+diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
+index 90e68bb47371..2d281cd4c54f 100644
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -9888,6 +9888,22 @@ mkdir(proc_t p, struct mkdir_args *uap, __unused int32_t *retval)
+ 	           UIO_USERSPACE);
+ }
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++/* SWEET: mkdir of a kernel-space path with the kernel context (bsd/dev/sweet_usb.c). */
++int sweet_kern_mkdir(const char *path, int mode);
++
++int
++sweet_kern_mkdir(const char *path, int mode)
++{
++	struct vnode_attr va;
++
++	VATTR_INIT(&va);
++	VATTR_SET(&va, va_mode, mode & ACCESSPERMS);
++	return mkdir1at(vfs_context_kernel(), CAST_USER_ADDR_T(path), &va, AT_FDCWD,
++	           UIO_SYSSPACE);
++}
++#endif
++
+ int
+ mkdirat(proc_t p, struct mkdirat_args *uap, __unused int32_t *retval)
+ {
