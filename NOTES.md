@@ -490,6 +490,14 @@ Separate effort from sweet; sweet handoff below is unchanged.
     OS_ACTIVITY_DT_MODE=YES to those processes' env (os_log mirrored to stderr -> /dev/null, captured with sweetnull=<names>
     as "|name| ..."), to finally read configd's own logs; (2) ue0 presence check scans for the bytes "ue0" (binary plists);
     (3) no HiddenConfiguration on the IOKit ue0 (explicit service only).
+    **0097 boot (18:36, `logs/spacewar-0097.txt`)**: prefs written again (0096's file had no ue0 bytes); configd now opens
+    IONetworkStack and **acts on ue0 for the first time**: "configd ue0 delete address 192.0.0.2", route add 127/8 and
+    224/4, but never a default route; 192.168.7.2 still answers ping; 0 forwarded. No "|configd|" lines: OS_ACTIVITY_DT_MODE
+    did not mirror configd's os_log to /dev/null (not honoured, or configd's stderr is not /dev/null) - unresolved.
+    Finding: ue0 never called bpfattach and its paths never tap BPF; IPConfiguration ARP-probes a manual address over BPF
+    before publishing the service's IPv4 state, and IPMonitor needs that state for the default route.
+    **xnu 0098** (`0098-sweet-ue0-bpf.patch`): bpfattach(ue0, DLT_EN10MB, 14), bpf_tap_out in ud_if_output, bpf_tap_in in
+    ud_rx_done (if_fake.c pattern).
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON

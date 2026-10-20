@@ -1,0 +1,42 @@
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index c9b0f95bec59..815d5206abe8 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -39,6 +39,7 @@
+ #include <pexpert/device_tree.h>
+ #include <sys/vnode.h>
+ #include <sys/fcntl.h>
++#include <net/bpf.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ void sweet_usb_probe(void);
+@@ -599,6 +600,7 @@ ud_rx_done(void)
+ 			stats.packets_in = 1;
+ 			stats.bytes_in = len;
+ 			ud.rx_frames++;
++			bpf_tap_in(ud.ifp, DLT_EN10MB, m, frame_header, ETHER_HDR_LEN);
+ 			ifnet_input(ud.ifp, m, &stats);
+ 		} else if (m != NULL) {
+ 			mbuf_freem(m);
+@@ -644,6 +646,7 @@ ud_if_output(ifnet_t ifp, mbuf_t m)
+ 		return 0;
+ 	}
+ 	ifnet_stat_increment_out(ifp, 1, mbuf_pkthdr_len(m), 0);
++	bpf_tap_out(ifp, DLT_EN10MB, m, NULL, 0);
+ 	ud.txq[(ud.txq_head + ud.txq_count) % UD_TXQ] = m;
+ 	ud.txq_count++;
+ 	ud_tx_kick_locked();
+@@ -750,6 +753,13 @@ ud_if_create(void)
+ 		return;
+ 	}
+ 	ifnet_set_lladdr(ud.ifp, ud_phone_mac, ETHER_ADDR_LEN);
++	/*
++	 * BPF: IPConfiguration probes a (manual) address with ARP over BPF before
++	 * publishing the service state IPMonitor needs for the default route
++	 * (0097: configd works on ue0, never routes through it). Drivers tap
++	 * explicitly (if_fake.c pattern).
++	 */
++	bpfattach(ud.ifp, DLT_EN10MB, ETHER_HDR_LEN);
+ 
+ 	errno_t err = proto_plumb(PF_INET, ud.ifp);
+ 	socket_t so = NULL;
