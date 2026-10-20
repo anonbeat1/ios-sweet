@@ -1,8 +1,17 @@
 diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
-index ab11e9f943b9..c2da9c1ece68 100644
+index ab11e9f943b9..b556922f850d 100644
 --- a/bsd/dev/sweet_usb.c
 +++ b/bsd/dev/sweet_usb.c
-@@ -49,6 +49,8 @@ static void sweet_usb_gadget_start(vm_offset_t dwc);
+@@ -42,6 +42,8 @@
+ #include <net/bpf.h>
+ #include <sys/dirent.h>
+ #include <sys/uio.h>
++#include <sys/stat.h>
++#include <sys/vnode_internal.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ void sweet_usb_probe(void);
+@@ -49,6 +51,8 @@ static void sweet_usb_gadget_start(vm_offset_t dwc);
  extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
  extern int sweet_smmu_map_sid(unsigned sid);
  extern int sweet_kern_mkdir(const char *path, int mode);
@@ -11,7 +20,7 @@ index ab11e9f943b9..c2da9c1ece68 100644
  extern struct vnode *rootvnode;
  extern kern_return_t thread_terminate(thread_t);
  extern void sweet_net_publish(const char *bsd_name, const char *prefix, unsigned unit,
-@@ -1081,14 +1083,18 @@ out:
+@@ -1081,14 +1085,18 @@ out:
  }
  
  /*
@@ -38,7 +47,7 @@ index ab11e9f943b9..c2da9c1ece68 100644
   */
  #define UD_FS_PORT      5141
  
-@@ -1230,6 +1236,67 @@ ud_fs_get(socket_t so, const char *path, vfs_context_t ctx)
+@@ -1230,6 +1238,67 @@ ud_fs_get(socket_t so, const char *path, vfs_context_t ctx)
  	vnode_close(vp, FREAD, ctx);
  }
  
@@ -106,7 +115,7 @@ index ab11e9f943b9..c2da9c1ece68 100644
  static void
  ud_fs_thread(void *arg __unused, wait_result_t wr __unused)
  {
-@@ -1269,7 +1336,7 @@ ud_fs_thread(void *arg __unused, wait_result_t wr __unused)
+@@ -1269,7 +1338,7 @@ ud_fs_thread(void *arg __unused, wait_result_t wr __unused)
  		struct timeval tv = { .tv_sec = 10, .tv_usec = 0 };
  		(void)sock_setsockopt(cs, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
  		(void)sock_setsockopt(cs, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
@@ -115,7 +124,7 @@ index ab11e9f943b9..c2da9c1ece68 100644
  		bool line = false;
  		while (have < sizeof(req) - 1 && !line) {
  			struct iovec iov = { .iov_base = req + have, .iov_len = sizeof(req) - 1 - have };
-@@ -1279,20 +1346,60 @@ ud_fs_thread(void *arg __unused, wait_result_t wr __unused)
+@@ -1279,20 +1348,60 @@ ud_fs_thread(void *arg __unused, wait_result_t wr __unused)
  				break;
  			}
  			for (size_t i = have; i < have + got; i++) {
