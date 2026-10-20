@@ -446,6 +446,12 @@ Separate effort from sweet; sweet handoff below is unchanged.
     client (proof InterfaceNamer saw the IOKit objects). Next boot: read the whole log for SWEET NET lines (publish, stack
     open, 0080's route/address trace from configd/IPConfiguration).
     0093 CI 39323280304 success -> `xnu/out-0093`; image `shim/out/spacewar-xnu-0093-daily.img` (same cmdline as 0092-daily).
+    **0093 boot (2026-10-20 17:39, `logs/spacewar-0093.txt`, 168 KB)**: still 0 packets forwarded by the Mac while Safari ran;
+    the log still starts mid-boot (first line a USB event), so no publish / configd lines. Reason: while ARP for the host is
+    unresolved, UDP sock_send returns 0 but the kernel keeps only one queued packet, so 0093's rewind never triggered.
+    Seen: "exec addNetworkInterface" early; FTS now gets SMR 8/9 + cb 8 (USB reused ABL's SMR for 0xe0, as intended).
+    **xnu 0094** (`0094-sweet-usblog-from-boot.patch`): live log streams from ring position 0 (whole console since boot,
+    4 MiB ring) and waits 15 s after USB is configured before the first send.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON

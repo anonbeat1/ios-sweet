@@ -1,0 +1,34 @@
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index 73371c330434..b8f010d4ddb0 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -875,9 +875,14 @@ ud_log_thread(void *arg __unused, wait_result_t wr __unused)
+ 	static char chunk[1400];
+ 	socket_t so = NULL;
+ 	struct sockaddr_in to;
+-	uint64_t pos = sweet_log_position();
+-
+-	pos = pos > 65536 ? pos - 65536 : 0;
++	/*
++	 * Stream the whole console since boot (the 4 MiB ring; sweet_log_copy
++	 * skips ahead if it wrapped). Starting a window back from "now" lost the
++	 * early lines: UDP sends "succeed" while ARP for the host is unresolved
++	 * and all but one queued packet is dropped.
++	 */
++	uint64_t pos = 0;
++	bool settled = false;
+ 	bzero(&to, sizeof(to));
+ 	to.sin_len = sizeof(to);
+ 	to.sin_family = AF_INET;
+@@ -888,6 +893,11 @@ ud_log_thread(void *arg __unused, wait_result_t wr __unused)
+ 		if (!ud.configured) {
+ 			continue;
+ 		}
++		if (!settled) {
++			/* give the host time to configure 192.168.7.1 and answer ARP */
++			ud_sleep_ms(15000);
++			settled = true;
++		}
+ 		if (so == NULL && sock_socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP, NULL, NULL, &so) != 0) {
+ 			so = NULL;
+ 			continue;
