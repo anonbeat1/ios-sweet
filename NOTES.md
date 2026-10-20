@@ -636,7 +636,15 @@ Separate effort from sweet; sweet handoff below is unchanged.
       Procursus server: the Mac itself took 319 s for the 2.9 MB Sileo .deb from apt.procurs.us (Cloudflare: 15 MB/s).
       Earlier guess "USB RX path" was WRONG for that symptom. Real link ceiling: ~1 frame per 1 ms poll (one RX TRB,
       one TX TRB, ud_sleep_ms(1) in ud_thread) ~= 1.1 MB/s; more TRBs per endpoint + interrupt/shorter poll could
-      reach several MB/s (USB 2.0 high speed). GPU research: iOS GLES is GL-over-Metal
+      reach several MB/s (USB 2.0 high speed).
+    **System lag, first pass (2026-10-20 ~23:10, measured with ps over ssh, 33 min uptime, load ~4):** vmd (VisualVoicemail)
+    102% CPU, 31 min CPU, 456 MB RSS - loops on CoreTelephony (CommCenter jobs were removed from the image; 154k
+    "Connection has been invalidated" in the log). `launchctl disable system/com.apple.voicemail.vmd` (persistent, undo
+    with enable) + bootout. ReportCrash 78-97%: mediaserverd SIGABRT every 10-20 s while apps use audio (no audio
+    device: "no object with given ID 0", "error -66680 finding Default-InputOutput"; VirtualAudio.plugin was moved away
+    earlier because it SIGSEGVs without a device) + 329 reports in /var/mobile/Library/Logs/CrashReporter. Killing
+    ReportCrash: load 4 -> 1.3, idle background ~0%. Next: a null audio HAL device (or keep mediaserverd from
+    crashing), maybe disable ReportCrash (kernel CRASH lines remain), then measure the render path (backboardd). GPU research: iOS GLES is GL-over-Metal
       (AppleMetalGLRenderer.bundle; GPU driver AGXMetalA11.bundle); QuartzCore still has CA::OGL::GLESContext and
       CA_ENABLE_OGL; no Metal-over-Vulkan layer exists (only Vulkan-over-Metal). Plan: check whether blur is missing because
       UIKit/MobileGestalt disable it (CA::OGL generic GaussianBlurFilter exists) before anything GPU. Shell PATH: /var/jb/usr/bin:/var/jb/bin:/var/jb/usr/sbin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin.
