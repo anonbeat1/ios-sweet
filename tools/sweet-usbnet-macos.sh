@@ -38,6 +38,12 @@ import os, socket, sys
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(("192.168.7.1", 5140))
+# hello: the phone (patch 0096) starts streaming once it hears from 192.168.7.1
+for _ in range(3):
+    try:
+        s.sendto(b"hello", ("192.168.7.2", 5140))
+    except OSError:
+        pass
 logf = open(os.environ["LOGFILE"], "ab") if os.environ.get("LOGFILE") else None
 while True:
     data, _ = s.recvfrom(65535)

@@ -474,6 +474,11 @@ Separate effort from sweet; sweet handoff below is unchanged.
     service: Interface DeviceName ue0 Type/Hardware Ethernet, IPv4 Manual 192.168.7.2/24 router 192.168.7.1, IPv6 Automatic,
     DNS 1.1.1.1/8.8.8.8, __VERSION__ 20191120; plutil-validated) unless the existing file already contains ue0. Logs
     "SWEET NET: wrote ... / already configures ue0 / writing ... failed".
+    **0095 boot (2026-10-20 ~18:10)**: still no internet, 0 forwarded. The host script sat on its sudo prompt for a long time,
+    so the phone streamed the whole boot log before the Mac had 192.168.7.1 and it was lost again (log starts mid-run): prefs
+    write / configd lines not visible. **xnu 0096** (`0096-sweet-usblog-wait-for-host.patch`): ud_rx_done sets host_seen on
+    an ARP (sender IP at frame offset 28) or IPv4 (source at 26) frame from 192.168.7.1; the log thread starts streaming (from
+    boot) only then. tools/sweet-usbnet-macos.sh sends 3 UDP "hello" datagrams to 192.168.7.2 after configuring the address.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
