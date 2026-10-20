@@ -655,6 +655,12 @@ Separate effort from sweet; sweet handoff below is unchanged.
     Ideas: 3/2 linear filter instead of nearest neighbour for sharpness (cheap: output pixel 1 of 3 = average of 2).
     ReportCrash DISABLED (user OK): `launchctl disable system/com.apple.ReportCrash` (undo: enable). Crashes still show as
     kernel "CRASH name ..." lines in the USB log; no new .ips files.
+    Sileo showed no packages: its setuid helper giveMeRoot (rootless package) checks realpath("/Applications/Sileo.app/
+    Sileo") == proc_pidpath(parent) -> "failed to retrieve Sileo app path" (the app is in /var/jb/Applications). Fix:
+    /Applications/Sileo.app/ (no Info.plist) with symlink Sileo -> /var/jb/Applications/Sileo.app/Sileo. Then Sileo
+    lists "procurs" + an "untitled repo" (not investigated). Added Chariz: /var/jb/etc/apt/sources.list.d/chariz.sources
+    (chariz-keyring was already installed); installed ws.hbang.newterm3 3.0~beta1 (iphoneos-arm64) with apt;
+    `uicache -l` -> ws.hbang.Terminal /private/var/jb/Applications/NewTerm.app.
     Messages (MobileSMS) crash: SIGSEGV at pc 0 in CI::GLContext::GLContext <- +[CIContext internalContextWithEAGLContext:]
     <- -[CIContext initWithOptions:] <- MobileIcons _MI_sharedIconCompositorContext / LICGImageCreateCoreImageLanczosScaled
     (icon compositing). iOS 16 CoreImage has only CI::GLContext and CI::MetalContext (no CPU context); initWithOptions
