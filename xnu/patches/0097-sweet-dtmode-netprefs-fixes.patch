@@ -1,0 +1,122 @@
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index 9438feaeb23f..c9b0f95bec59 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -1017,8 +1017,13 @@ ud_prefs_has_ue0(vfs_context_t ctx)
+ 		return -1;
+ 	}
+ 	size_t n = sizeof(buf) - 1 - (size_t)resid;
+-	buf[n] = 0;
+-	return strnstr(buf, "<string>ue0</string>", n) != NULL ? 1 : 0;
++	/* configd rewrites the file as a binary plist: look for the bytes "ue0" anywhere */
++	for (size_t i = 0; i + 3 <= n; i++) {
++		if (buf[i] == 'u' && buf[i + 1] == 'e' && buf[i + 2] == '0') {
++			return 1;
++		}
++	}
++	return 0;
+ }
+ 
+ static void
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 68612dbe3dd2..e4fd5d642e20 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5541,6 +5541,51 @@ bad:
+ }
+ 
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++/*
++ * SWEET: processes named in boot-arg sweetdtmode (comma separated basenames)
++ * get OS_ACTIVITY_DT_MODE=YES, which makes libsystem_trace mirror os_log
++ * messages to stderr. launchd points daemons' stderr at /dev/null, and the
++ * /dev/null tee (boot-arg sweetnull, bsd/dev/mem.c) puts it in the console
++ * log: a way to read a daemon's own logs without logd.
++ */
++static bool
++sweet_exec_dtmode(const char *path)
++{
++	static char names[128];
++	static int parsed;
++
++	if (!parsed) {
++		if (!PE_parse_boot_argn("sweetdtmode", names, sizeof(names))) {
++			names[0] = '\0';
++		}
++		parsed = 1;
++	}
++	if (names[0] == '\0' || path == NULL) {
++		return false;
++	}
++	const char *base = path;
++	for (const char *c = path; *c; c++) {
++		if (*c == '/') {
++			base = c + 1;
++		}
++	}
++	size_t n = strlen(base);
++	for (const char *t = names; *t;) {
++		const char *end = strchr(t, ',');
++		size_t tl = end ? (size_t)(end - t) : strlen(t);
++		if (tl == n && n > 0 && strncmp(t, base, n) == 0) {
++			return true;
++		}
++		if (!end) {
++			break;
++		}
++		t = end + 1;
++	}
++	return false;
++}
++#endif
++
+ /*
+  * exec_extract_strings
+  *
+@@ -5741,6 +5786,22 @@ exec_extract_strings(struct image_params *imgp)
+ 		imgp->ip_envc++;
+ 	}
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	if (sweet_exec_dtmode(imgp->ip_strings + strlen(EXECUTABLE_KEY))) {
++		error = exec_add_user_string(imgp, CAST_USER_ADDR_T("OS_ACTIVITY_DT_MODE=YES"),
++		    UIO_SYSSPACE, TRUE);
++		if (error) {
++			goto bad;
++		}
++		if (imgp->ip_argspace < new_ptr_size) {
++			error = E2BIG;
++			goto bad;
++		}
++		imgp->ip_argspace -= new_ptr_size;
++		imgp->ip_envc++;
++	}
++#endif
++
+ 	/* Save space for envv[] NULL terminator */
+ 	if (imgp->ip_argspace < new_ptr_size) {
+ 		error = E2BIG;
+diff --git a/iokit/Kernel/arm/SweetNetwork.cpp b/iokit/Kernel/arm/SweetNetwork.cpp
+index c2899e3d33ea..cce146e62cb8 100644
+--- a/iokit/Kernel/arm/SweetNetwork.cpp
++++ b/iokit/Kernel/arm/SweetNetwork.cpp
+@@ -214,12 +214,16 @@ sweet_net_publish(const char *bsd_name, const char *prefix, unsigned unit,
+ 	intf->setProperty("BSD Name", bsd_name);
+ 	intf->setProperty("IOInterfaceNamePrefix", prefix);
+ 	intf->setProperty("IOInterfaceUnit", (unsigned long long)unit, 32);
+-	intf->setProperty("HiddenConfiguration", kOSBooleanTrue);
++	/*
++	 * Not "HiddenConfiguration": as Apple pre-configured, PreferencesMonitor
++	 * removed the explicit ue0 service from preferences.plist (0095/0096) to
++	 * substitute its own. The explicit service written by sweet_usb.c is used.
++	 */
+ 	sweet_net_set_overrides(intf, ip, mask, router, dns1, dns2);
+ 	bool intf_ok = sweet_net_attach(intf, ctrl);
+ 	ctrl->release();
+ 
+-	IOLog("SWEET NET: IOKit interface %s %s (built-in, pre-configured %s via %s, stack %s)\n",
++	IOLog("SWEET NET: IOKit interface %s %s (built-in, %s via %s, stack %s)\n",
+ 	    bsd_name, intf_ok ? "published" : "NOT published", ip, router,
+ 	    stack_published ? "up" : "missing");
+ }

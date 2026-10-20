@@ -479,6 +479,17 @@ Separate effort from sweet; sweet handoff below is unchanged.
     write / configd lines not visible. **xnu 0096** (`0096-sweet-usblog-wait-for-host.patch`): ud_rx_done sets host_seen on
     an ARP (sender IP at frame offset 28) or IPv4 (source at 26) frame from 192.168.7.1; the log thread starts streaming (from
     boot) only then. tools/sweet-usbnet-macos.sh sends 3 UDP "hello" datagrams to 192.168.7.2 after configuring the address.
+    **0096 boot (18:22, `logs/spacewar-0096.txt`, full log from boot)**: "SWEET NET: wrote .../preferences.plist (set + manual
+    ue0 service, 1802 bytes)" (so the 0095-written file no longer had the XML "<string>ue0</string>": configd rewrites it as
+    a binary plist, and/or PreferencesMonitor removed the service for the pre-configured ue0). Unlike 0094, configd never
+    did IOServiceFirstMatch IONetworkStack/IONetworkInterface nor opened the stack (InterfaceNamer stopped before
+    setup_IOKit; setup_Virtual = SCPreferencesCreate+schedule, cause unknown); only repeated BSD-name lookups ue0 (found) /
+    stf0 (not). Still no address/route from configd, 0 forwarded, no Ethernet row in Settings (user). ue0's SIOCGIFMEDIA
+    already reports IFM_ACTIVE once USB is configured (0081), so link state is not the blocker.
+    **xnu 0097** (`0097-sweet-dtmode-netprefs-fixes.patch`): (1) boot-arg sweetdtmode=<names>: kern_exec adds
+    OS_ACTIVITY_DT_MODE=YES to those processes' env (os_log mirrored to stderr -> /dev/null, captured with sweetnull=<names>
+    as "|name| ..."), to finally read configd's own logs; (2) ue0 presence check scans for the bytes "ue0" (binary plists);
+    (3) no HiddenConfiguration on the IOKit ue0 (explicit service only).
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
