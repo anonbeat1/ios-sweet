@@ -498,6 +498,14 @@ Separate effort from sweet; sweet handoff below is unchanged.
     before publishing the service's IPv4 state, and IPMonitor needs that state for the default route.
     **xnu 0098** (`0098-sweet-ue0-bpf.patch`): bpfattach(ue0, DLT_EN10MB, 14), bpf_tap_out in ud_if_output, bpf_tap_in in
     ud_rx_done (if_fake.c pattern).
+    **MILESTONE (2026-10-20 ~18:55, 0098, `shim/out/spacewar-xnu-0098-daily.img`, log `logs/spacewar-0098.txt`): iOS USES THE
+    USB NETWORK - internet on the Nothing Phone (1) through the Mac.** Mac `netstat -s -p ip`: 74120 packets forwarded (0
+    before 0098) with the pf NAT on en0; user reports it works. preferences.plist from the 0097 boot was kept ("already
+    configures ue0"). Root cause of the last wall: ue0 had no BPF attachment, so IPConfiguration could not finish the manual
+    IPv4 (ARP probe over BPF) and IPMonitor never got the service state for the default route. Note: the 0080 rtsock trace
+    printed no default "route add" (route installed through a path the trace does not cover; not investigated).
+    Recipe: kernel 0098 + ADT sweet-0091sw, sweetusb=2; Mac: tools/sweet-usbnet-macos.sh (in Terminal for sudo) and
+    tools/sweet-nat-macos.sh on (pf NAT to the Mac's default-route interface).
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
