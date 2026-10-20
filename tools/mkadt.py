@@ -104,7 +104,7 @@ def node(name, props=(), children=()):
     return n
 
 
-def build(seed=None, qemu=False, highmem=False, spacewar=False, ft_fw=None):
+def build(seed=None, qemu=False, highmem=False, spacewar=False, ft_fw=None, scale=3):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
     phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
     fb, vtimer = FB, VTIMER_INTID
@@ -134,7 +134,8 @@ def build(seed=None, qemu=False, highmem=False, spacewar=False, ft_fw=None):
         # from /chosen, the pixel size from IOMobileFramebuffer. Scale 0 makes
         # SpringBoard's FBSDisplayMode "infxinf@0x" invalid. 1080x2400 @3x =
         # 360x800 points (like iPhone X class devices).
-        ('display-scale', u32(3)),
+        # --scale 2 goes with the kernel boot-arg sweetfb_scale=2 (750x1624).
+        ('display-scale', u32(scale)),
         # XNU derives IOPlatformUUID (gethostuuid) from these on arm; without
         # them CFPreferences cannot use kCFPreferencesCurrentHost (no ByHost
         # files), so e.g. DataMigration never records LastSystemVersion and
@@ -214,8 +215,8 @@ def build(seed=None, qemu=False, highmem=False, spacewar=False, ft_fw=None):
             ph(),
             ('device_type', cstr('display-subsystem')),
             ('compatible', cstr('sweet,display')),
-            ('canvas-width', u32(1125)),
-            ('canvas-height', u32(2436)),
+            ('canvas-width', u32(375 * scale)),
+            ('canvas-height', u32(812 * scale)),
         ])])
 
     fbcon = node('sweet-fbcon', [
@@ -294,7 +295,8 @@ if __name__ == '__main__':
         ft_fw = ft_firmware(sys.argv[sys.argv.index('--ft-fw') + 1])
         print(f'FT3680 firmware: {len(ft_fw)} bytes', file=sys.stderr)
     root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv,
-                 spacewar='--spacewar' in sys.argv, ft_fw=ft_fw)
+                 spacewar='--spacewar' in sys.argv, ft_fw=ft_fw,
+                 scale=int(sys.argv[sys.argv.index('--scale') + 1]) if '--scale' in sys.argv else 3)
     blob = adt.serialize(root)
     open(sys.argv[1], 'wb').write(blob)
     if '--dump' in sys.argv:
