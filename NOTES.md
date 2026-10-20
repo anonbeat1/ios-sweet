@@ -621,7 +621,15 @@ Separate effort from sweet; sweet handoff below is unchanged.
       sshd_config: UsePAM no (backup research/ssh/sshd_config.orig). The wrapper is also a way to run any command as
       root at the next ssh connection.
     - tools/sweet-usbnet-macos.sh now re-applies 192.168.7.1 after phone reboots and re-sends hello (pass the log file
-      as argument). Shell PATH: /var/jb/usr/bin:/var/jb/bin:/var/jb/usr/sbin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin.
+      as argument). Sileo (2026-10-20 ~22:35): ran /var/jb/prep_bootstrap.sh with NO_PASSWORD_PROMPT=1 (creates the
+      "firmware" virtual package 16.7.16, pwd_mkdb, postinsts, chsh zsh); removed shshd libdimentio0 libkrw0 (jailbreak-only,
+      libkrw0 needed a kernel r/w plugin); `apt-get install org.coolstar.sileo` (2.5.1, from the Procursus 1900 repo itself,
+      no extra repo/key); registered: `uicache -l` -> org.coolstar.SileoStore /private/var/jb/Applications/Sileo.app.
+      Downloads to the phone are ~4-5 KB/s (apt index 342 kB in 83 s) while phone->Mac is ~1 MB/s: suspect the USB gadget
+      RX path (one OUT buffer re-armed per poll) - next to fix. GPU research: iOS GLES is GL-over-Metal
+      (AppleMetalGLRenderer.bundle; GPU driver AGXMetalA11.bundle); QuartzCore still has CA::OGL::GLESContext and
+      CA_ENABLE_OGL; no Metal-over-Vulkan layer exists (only Vulkan-over-Metal). Plan: check whether blur is missing because
+      UIKit/MobileGestalt disable it (CA::OGL generic GaussianBlurFilter exists) before anything GPU. Shell PATH: /var/jb/usr/bin:/var/jb/bin:/var/jb/usr/sbin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin.
     Logs: launchd's own file /private/var/log/com.apple.xpc.launchd/launchd.log. Incremental log pull
     (newest 4 tracev3 of Persist/Special + timesync, uuidtext copied from the old archive): research/logs-0102.logarchive.
     SSH install (done, see above): `tools/sweet-ssh-setup.py
