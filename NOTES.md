@@ -559,6 +559,11 @@ Separate effort from sweet; sweet handoff below is unchanged.
     root@192.168.7.2`.
     **MILESTONE (2026-10-20 ~20:55, same boot): SAFARI RENDERS PAGES** (user: "riesco a vedere le immagini su safari") after
     the sRGB /product gamut fix (WebKit.GPU BGRA surfaces instead of b3a8/w30r).
+    Wallpaper GALLERY previews are white/grey (user, same boot). Observed: poster extensions run and get scenes/snapshot
+    requests; SpringBoard "Failed to get Metal device for GPU rendering"; PridePoster "no renderer to update". Linked
+    frameworks: PridePoster Metal/MetalKit/MPS, EmojiPoster SpriteKit+SceneKit, GradientPoster CoreImage, WallpaperKit
+    Metal+CoreImage. Guess: GPU-drawn content stays empty with the CPU renderer (same family as missing blur). Possible
+    follow-up: make GradientPoster's CoreImage use its CPU renderer. Full log of that boot: research/logs-0102b.txt.
     **MILESTONE (2026-10-20 ~20:50, boot 1F6EB8FC, 0102 + sweet-0102sw.adt): WALLPAPER VISIBLE** (user: "vedo lo sfondo").
     lsd rebuilt the LS database on that boot (seeding started ~105 s after boot, ~2.4 s per bundle, >237 bundles in
     9.5 min; the Apple logo stays until it finishes) and logged "Registering extension point: com.apple.posterkit.provider
