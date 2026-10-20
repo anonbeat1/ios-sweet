@@ -33,7 +33,8 @@ JOB = {
     'ProgramArguments': ['/var/jb/bin/sh', '/var/jb/usr/libexec/sshd-keygen-wrapper', '-i'],
     'Sockets': {'SSHListener': {'SockServiceName': '22'}},
     'inetdCompatibility': {'Wait': False},
-    'SessionCreate': True,
+    # SessionCreate put the inetd instances in user/501 (mobile) even with UserName root
+    'LimitLoadToSessionType': 'System',
     'POSIXSpawnType': 'Interactive',
     'ProcessType': 'Interactive',
     'StandardErrorPath': '/dev/null',
