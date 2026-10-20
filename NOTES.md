@@ -589,6 +589,14 @@ Separate effort from sweet; sweet handoff below is unchanged.
     `mount`/`mount_hfs` boot tasks remount it before `exec launchd_cache_loader`; 0099 log lines 417-656). xnu 0104 runs
     sweetcp once at the exec of launchd_cache_loader (kern_exec.c) instead (CI 39483322833 -> xnu/out-0104). Images:
     shim/out/spacewar-xnu-0104-restore-launchd.img (sweetcp .pre-ssh -> launchd.plist) and spacewar-xnu-0104.img (normal).
+    0104 RESULT (photo ~21:36): "SWEET CP: .../launchd.plist.pre-ssh -> .../launchd.plist: 795217 bytes, error 0" just
+    before exec launchd_cache_loader, and STILL "No service cache" panic. launchd RE (/sbin/launchd sub_100019a84): exits
+    "No service cache" after "No MRM cache found" (no data) or "Unable to parse MRM cache" (xpc_create_from_plist failed).
+    research/launchd.plist.pre-ssh is a valid bplist, so the bytes read on the phone are suspect (guess: file data
+    written over the file server/UFS is corrupted on disk). xnu 0105 (CI 39485283208) prints FNV-1a per 64 KiB of src and
+    dst as read back; image shim/out/spacewar-xnu-0105-restore-launchd.img. Expected for .pre-ssh: 795217 bytes, fnv
+    57d344be; per 64K: a56c90a2 1df76fd2 bf476804 87203f80 98d19e75 079e077f cac184ce 8a66e353 d3fe1aaa 21154f99 c156d862
+    acbd1d90 7d1907ec.
     Logs: launchd's own file /private/var/log/com.apple.xpc.launchd/launchd.log. Incremental log pull
     (newest 4 tracev3 of Persist/Special + timesync, uuidtext copied from the old archive): research/logs-0102.logarchive.
     SSH install (done, see above): `tools/sweet-ssh-setup.py
