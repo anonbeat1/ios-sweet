@@ -1,0 +1,80 @@
+diff --git a/bsd/dev/mem.c b/bsd/dev/mem.c
+index 291a546cc375..0599349604a2 100644
+--- a/bsd/dev/mem.c
++++ b/bsd/dev/mem.c
+@@ -162,7 +162,7 @@ mmioctl(dev_t dev, u_long cmd, __unused caddr_t data,
+  * /dev/null goes to the console (and so to the persistent log) as
+  * "|name| text". sweetnull=- turns it off.
+  */
+-static char sweet_null_names[128];
++static char sweet_null_names[256];
+ static int sweet_null_parsed;
+ 
+ static bool
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index e4fd5d642e20..4bfd92a19ec7 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5552,7 +5552,7 @@ bad:
+ static bool
+ sweet_exec_dtmode(const char *path)
+ {
+-	static char names[128];
++	static char names[256];
+ 	static int parsed;
+ 
+ 	if (!parsed) {
+diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
+index cb67b4db110f..9f84c6d7c104 100644
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -305,8 +305,40 @@ sweet_sandbox_syscall(struct proc *p, int call, __unused user_addr_t arg)
+ 	}
+ }
+ 
++/*
++ * __mac_syscall("AMFI", 0x5a, {input flags, user pointer to output flags})
++ * is amfi_check_dyld_policy_self(). Without a policy named "AMFI" it failed
++ * with ENOPOLICY, which dyld treats as "no permissions" and libsystem_trace
++ * (_os_trace_init_slow) as "development env vars not allowed", so
++ * OS_ACTIVITY_DT_MODE was ignored. Answer with only bit 8 (allow
++ * development env vars, checked by libsystem_trace; dyld uses bits 0-7,
++ * which stay clear as before). Other AMFI calls keep failing.
++ */
++#define SWEET_AMFI_DYLD_POLICY          0x5a
++#define SWEET_AMFI_ALLOW_DEV_ENV_VARS   (1ULL << 8)
++
++static int
++sweet_amfi_syscall(__unused struct proc *p, int call, user_addr_t arg)
++{
++	struct {
++		uint64_t input;
++		uint64_t output;        /* user pointer to uint64_t */
++	} args;
++	uint64_t flags = SWEET_AMFI_ALLOW_DEV_ENV_VARS;
++
++	if (call != SWEET_AMFI_DYLD_POLICY) {
++		return ENOPOLICY;
++	}
++	int error = copyin(arg, &args, sizeof(args));
++	if (error == 0) {
++		error = copyout(&flags, (user_addr_t)args.output, sizeof(flags));
++	}
++	return error;
++}
++
+ static const struct mac_policy_ops sweet_amfi_mac_ops = {
+ 	.mpo_vnode_check_signature = sweet_amfi_vnode_check_signature,
++	.mpo_policy_syscall = sweet_amfi_syscall,
+ };
+ 
+ /*
+@@ -360,7 +392,7 @@ static struct mac_policy_conf sweet_sandbox_mac_conf = {
+ static mac_policy_handle_t sweet_sandbox_mac_handle;
+ 
+ static struct mac_policy_conf sweet_amfi_mac_conf = {
+-	.mpc_name = "SWEET AMFI",
++	.mpc_name = "AMFI",      /* __mac_syscall target */
+ 	.mpc_fullname = "SWEET built-in Mobile File Integrity",
+ 	.mpc_ops = &sweet_amfi_mac_ops,
+ };
