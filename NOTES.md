@@ -644,7 +644,12 @@ Separate effort from sweet; sweet handoff below is unchanged.
     device: "no object with given ID 0", "error -66680 finding Default-InputOutput"; VirtualAudio.plugin was moved away
     earlier because it SIGSEGVs without a device) + 329 reports in /var/mobile/Library/Logs/CrashReporter. Killing
     ReportCrash: load 4 -> 1.3, idle background ~0%. Next: a null audio HAL device (or keep mediaserverd from
-    crashing), maybe disable ReportCrash (kernel CRASH lines remain), then measure the render path (backboardd). GPU research: iOS GLES is GL-over-Metal
+    crashing), maybe disable ReportCrash (kernel CRASH lines remain), then measure the render path (backboardd).
+    Render cost measured: backboardd ~450% CPU (4.5 of 8 cores) while animating; CA renders 1125x2436 (2.74 Mpx) on the
+    CPU. xnu 0107 (CI 39494951080) + `mkadt.py --scale 2`: boot-arg sweetfb_scale=2 presents 750x1624 (same 375x812
+    points, 2.25x fewer pixels), panel shows the centered 720x1600 scaled 1.5x (nearest neighbour, fColMap/fRowMap);
+    ADT display-scale 2 + disp0 canvas 750x1624. Image shim/out/spacewar-xnu-0107-scale2.img (ADT sweet-0107sw-s2.adt,
+    cmdline of 0106 + sweetfb_scale=2). NOT booted yet. Fallback: spacewar-xnu-0106-normal.img (scale 3). GPU research: iOS GLES is GL-over-Metal
       (AppleMetalGLRenderer.bundle; GPU driver AGXMetalA11.bundle); QuartzCore still has CA::OGL::GLESContext and
       CA_ENABLE_OGL; no Metal-over-Vulkan layer exists (only Vulkan-over-Metal). Plan: check whether blur is missing because
       UIKit/MobileGestalt disable it (CA::OGL generic GaussianBlurFilter exists) before anything GPU. Shell PATH: /var/jb/usr/bin:/var/jb/bin:/var/jb/usr/sbin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin.
