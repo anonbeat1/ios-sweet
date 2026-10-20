@@ -1,0 +1,202 @@
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index ab11e9f943b9..c2da9c1ece68 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -49,6 +49,8 @@ static void sweet_usb_gadget_start(vm_offset_t dwc);
+ extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
+ extern int sweet_smmu_map_sid(unsigned sid);
+ extern int sweet_kern_mkdir(const char *path, int mode);
++extern int sweet_kern_symlink(const char *target, const char *path);
++extern int unlink1(vfs_context_t, vnode_t, user_addr_t, enum uio_seg, int);
+ extern struct vnode *rootvnode;
+ extern kern_return_t thread_terminate(thread_t);
+ extern void sweet_net_publish(const char *bsd_name, const char *prefix, unsigned unit,
+@@ -1081,14 +1083,18 @@ out:
+ }
+ 
+ /*
+- * Read-only file server for the host, so logd's files (and other state) can
+- * be read without a shell: TCP 192.168.7.2:5141, one request per connection,
+- * a line "LS <dir>" or "GET <file>".
+- *   LS  -> "OK\n" then "<d|f|l|?> <size> <name>\n" per entry, connection closed.
+- *   GET -> "OK <size>\n" then the bytes, connection closed.
+- *   error -> "ERR <errno>\n".
+- * Files are read as the kernel (no permission checks); only reachable over the
+- * USB link. Host side: tools/sweet-pull.py. Boot-arg sweetfs=0 disables it.
++ * File server for the host, so logd's files (and other state) can be read,
++ * and files installed, without a shell: TCP 192.168.7.2:5141, one request
++ * per connection, one line:
++ *   LS /dir               -> "OK\n" then "<d|f|l|?> <size> <name>\n" per entry.
++ *   GET /file             -> "OK <size>\n" then the bytes.
++ *   PUT <mode> <size> /f  -> then <size> bytes; file replaced, mode set (octal,
++ *                            setuid bits included) -> "OK\n".
++ *   MKDIR <mode> /dir     -> "OK\n" (also when it exists).
++ *   SYMLINK /link target  -> "OK\n" (an existing /link is replaced).
++ *   error -> "ERR <errno>\n". The connection is closed after each reply.
++ * Runs as the kernel (no permission checks); only reachable over the USB
++ * link. Host side: tools/sweet-pull.py. Boot-arg sweetfs=0 disables it.
+  */
+ #define UD_FS_PORT      5141
+ 
+@@ -1230,6 +1236,67 @@ ud_fs_get(socket_t so, const char *path, vfs_context_t ctx)
+ 	vnode_close(vp, FREAD, ctx);
+ }
+ 
++static int
++ud_fs_chmod(const char *path, int mode, vfs_context_t ctx)
++{
++	vnode_t vp = NULLVP;
++	struct vnode_attr va;
++	int err = vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW, &vp, ctx);
++	if (err == 0) {
++		VATTR_INIT(&va);
++		VATTR_SET(&va, va_mode, mode & 07777);
++		err = vnode_setattr(vp, &va, ctx);
++		vnode_put(vp);
++	}
++	return err;
++}
++
++/* PUT: the request line has been read; "extra" bytes of the body came with it. */
++static int
++ud_fs_put(socket_t so, const char *path, int mode, off_t size, const char *extra,
++    size_t nextra, vfs_context_t ctx)
++{
++	static char fbuf[65536];
++	vnode_t vp = NULLVP;
++	int err = vnode_open(path, O_CREAT | O_TRUNC | FWRITE | O_NOFOLLOW, mode & ACCESSPERMS,
++	    0, &vp, ctx);
++	if (err != 0) {
++		return err;
++	}
++	off_t off = 0;
++	while (off < size) {
++		size_t len;
++		if (nextra > 0) {
++			len = MIN(nextra, (size_t)(size - off));
++			memcpy(fbuf, extra, len);
++			nextra = 0;
++		} else {
++			struct iovec iov = { .iov_base = fbuf, .iov_len = (size_t)MIN((off_t)sizeof(fbuf), size - off) };
++			struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1 };
++			len = 0;
++			err = sock_receive(so, &msg, 0, &len);
++			if (err == 0 && len == 0) {
++				err = EPIPE;
++			}
++			if (err != 0) {
++				break;
++			}
++		}
++		int resid = 0;
++		err = vn_rdwr(UIO_WRITE, vp, fbuf, (int)len, off, UIO_SYSSPACE, IO_NOAUTH,
++		    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++		if (err == 0 && resid != 0) {
++			err = ENOSPC;
++		}
++		if (err != 0) {
++			break;
++		}
++		off += (off_t)len;
++	}
++	vnode_close(vp, FWRITE, ctx);
++	return err != 0 ? err : ud_fs_chmod(path, mode, ctx);
++}
++
+ static void
+ ud_fs_thread(void *arg __unused, wait_result_t wr __unused)
+ {
+@@ -1269,7 +1336,7 @@ ud_fs_thread(void *arg __unused, wait_result_t wr __unused)
+ 		struct timeval tv = { .tv_sec = 10, .tv_usec = 0 };
+ 		(void)sock_setsockopt(cs, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+ 		(void)sock_setsockopt(cs, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+-		size_t have = 0;
++		size_t have = 0, eol = 0;
+ 		bool line = false;
+ 		while (have < sizeof(req) - 1 && !line) {
+ 			struct iovec iov = { .iov_base = req + have, .iov_len = sizeof(req) - 1 - have };
+@@ -1279,20 +1346,60 @@ ud_fs_thread(void *arg __unused, wait_result_t wr __unused)
+ 				break;
+ 			}
+ 			for (size_t i = have; i < have + got; i++) {
+-				if (req[i] == '\n' || req[i] == '\r') {
++				if (req[i] == '\n') {
+ 					req[i] = '\0';
++					eol = i;
+ 					line = true;
+ 					break;
+ 				}
+ 			}
+ 			have += got;
+ 		}
++		int err = EINVAL;
+ 		if (line && strncmp(req, "LS /", 4) == 0) {
+ 			ud_fs_ls(cs, req + 3, ctx);
++			err = 0;
+ 		} else if (line && strncmp(req, "GET /", 5) == 0) {
+ 			ud_fs_get(cs, req + 4, ctx);
+-		} else {
+-			(void)ud_fs_printf(cs, "ERR %d\n", EINVAL);
++			err = 0;
++		} else if (line && strncmp(req, "PUT ", 4) == 0) {
++			/* PUT <octal mode> <decimal size> /path */
++			char *end;
++			unsigned long mode = strtoul(req + 4, &end, 8);
++			unsigned long long size = (end && *end == ' ') ? strtouq(end + 1, &end, 10) : 0;
++			if (end && end[0] == ' ' && end[1] == '/') {
++				err = ud_fs_put(cs, end + 1, (int)mode, (off_t)size, req + eol + 1,
++				    have - eol - 1, ctx);
++				(void)ud_fs_printf(cs, err ? "ERR %d\n" : "OK\n", err);
++			}
++			err = 0;
++		} else if (line && strncmp(req, "MKDIR ", 6) == 0) {
++			char *end;
++			unsigned long mode = strtoul(req + 6, &end, 8);
++			if (end && end[0] == ' ' && end[1] == '/') {
++				err = sweet_kern_mkdir(end + 1, (int)mode);
++				if (err == EEXIST) {
++					err = 0;
++				}
++				if (err == 0) {
++					err = ud_fs_chmod(end + 1, (int)mode, ctx);
++				}
++				(void)ud_fs_printf(cs, err ? "ERR %d\n" : "OK\n", err);
++				err = 0;
++			}
++		} else if (line && strncmp(req, "SYMLINK /", 9) == 0) {
++			/* SYMLINK /link target (the link path has no spaces) */
++			char *sp = strchr(req + 8, ' ');
++			if (sp != NULL) {
++				*sp = '\0';
++				(void)unlink1(ctx, NULLVP, CAST_USER_ADDR_T(req + 8), UIO_SYSSPACE, 0);
++				err = sweet_kern_symlink(sp + 1, req + 8);
++				(void)ud_fs_printf(cs, err ? "ERR %d\n" : "OK\n", err);
++				err = 0;
++			}
++		}
++		if (err != 0) {
++			(void)ud_fs_printf(cs, "ERR %d\n", err);
+ 		}
+ 		sock_close(cs);
+ 	}
+diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
+index 2d281cd4c54f..7a01a890eed0 100644
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -9902,6 +9902,16 @@ sweet_kern_mkdir(const char *path, int mode)
+ 	return mkdir1at(vfs_context_kernel(), CAST_USER_ADDR_T(path), &va, AT_FDCWD,
+ 	           UIO_SYSSPACE);
+ }
++
++/* SWEET: symlink(target, path) with kernel-space strings and the kernel context. */
++int sweet_kern_symlink(const char *target, const char *path);
++
++int
++sweet_kern_symlink(const char *target, const char *path)
++{
++	return symlinkat_internal(vfs_context_kernel(), CAST_USER_ADDR_T(target), AT_FDCWD,
++	           CAST_USER_ADDR_T(path), UIO_SYSSPACE);
++}
+ #endif
+ 
+ int
