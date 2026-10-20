@@ -550,8 +550,14 @@ Separate effort from sweet; sweet handoff below is unchanged.
     MGGetBoolAnswer("Aixt/MEN2O2B7f+8m4TxUA") = HasExtendedColorDisplay = (ArtworkDisplayGamut == "P3"); ArtworkDisplayGamut
     = /product artwork-display-gamut, which the D22AP /product copied by mkadt says "P3". mkadt now writes "sRGB"
     (`shim/out/sweet-0102sw.adt`). Image `shim/out/spacewar-xnu-0102-srgb.img` = 0102 + sweet-0102sw.adt + cmdline of 0101
-    (sweetdtmode/sweetnull += lsd). NOT booted yet. Expect: Safari renders (guess), extension point cache loads.
-    SSH plan (user asked for apps/tweaks/terminal; NOT done yet, needs user OK before writing): `tools/sweet-ssh-setup.py
+    (sweetdtmode/sweetnull += lsd). BOOTED 2026-10-20 ~20:08 (log logs/spacewar-0101.txt, overwritten by the user's
+    script): WebKit.GPU now creates fmt 0x42475241 'BGRA' surfaces (was b3a8/w30r). AMFI service used by online-auth-agent
+    sel 9 and 13 (-> unsupported 0xe00002c7). Safari result: not reported yet.
+    DONE with user OK (2026-10-20 ~20:10): both LS databases deleted (backups research/ls-backup/) so lsd rebuilds with the
+    extension point cache; SSH installed (`sweet-ssh-setup.py`, 6584 entries, launchd.plist 795488 bytes, backup
+    research/launchd.plist.pre-ssh + phone .pre-ssh). Takes effect at the next boot: then `ssh -i research/ssh/id_ed25519
+    root@192.168.7.2`.
+    SSH install (done, see above): `tools/sweet-ssh-setup.py
     research/procursus/bootstrap-ssh-1900.tar.zst research/ssh/id_ed25519.pub` = Procursus rootless 1900 bootstrap into
     /var/jb (4982 files, 1151 symlinks, 451 dirs), /bin/sh -> /var/jb/bin/sh, /var/root/.ssh/authorized_keys, sshd job
     (port 22, inetd) added to the phone's /System/Library/xpc/launchd.plist (backup research/launchd.plist.pre-ssh and
