@@ -26,6 +26,9 @@ LAUNCHD = '/System/Library/xpc/launchd.plist'
 JOB_KEY = '/System/Library/LaunchDaemons/com.openssh.sshd.plist'
 JOB = {
     'Label': 'com.openssh.sshd',
+    # iOS runs LaunchDaemons as mobile (user/501) without UserName; sshd then exits 1
+    'UserName': 'root',
+    'GroupName': 'wheel',
     'Program': '/var/jb/bin/sh',
     'ProgramArguments': ['/var/jb/bin/sh', '/var/jb/usr/libexec/sshd-keygen-wrapper', '-i'],
     'Sockets': {'SSHListener': {'SockServiceName': '22'}},
