@@ -506,6 +506,25 @@ Separate effort from sweet; sweet handoff below is unchanged.
     printed no default "route add" (route installed through a path the trace does not cover; not investigated).
     Recipe: kernel 0098 + ADT sweet-0091sw, sweetusb=2; Mac: tools/sweet-usbnet-macos.sh (in Terminal for sudo) and
     tools/sweet-nat-macos.sh on (pf NAT to the Mac's default-route interface).
+    **os_log access, xnu 0099** (`0099-sweet-amfi-dyld-policy-dtmode.patch`, CI 39462548495 -> `xnu/out-0099`). Why 0097's
+    OS_ACTIVITY_DT_MODE did nothing (observed in the iOS 16.7 cache): `_os_trace_init_slow` reads OS_ACTIVITY_DT_MODE /
+    ACTIVITY_LOG_STDERR / CFLOG_FORCE_STDERR only if `_os_trace_allow_development_env_vars` = amfi_check_dyld_policy_self()
+    == 0 && output bit 8; that is `__mac_syscall("AMFI", 0x5a, {u64 in, u64 *out})`, which failed (no policy "AMFI").
+    0099 renames the SWEET AMFI MAC policy to "AMFI" and answers 0x5a with flags = 1<<8 only (dyld's bits 0-7 stay 0, same
+    as the old failure for dyld); other AMFI calls -> ENOPOLICY. sweetdtmode/sweetnull lists widened to 256 chars.
+    Limits of `_os_log_impl_mirror_to_stderr`: messages from images under /System/Library/, /usr/lib/, /System/Developer/
+    are mirrored only for error/fault types; the main binary's messages are mirrored at all levels. Output = "|name| ..."
+    lines via the /dev/null tee. mkpayload now refuses a cmdline > 607 bytes instead of truncating.
+    Image `shim/out/spacewar-xnu-0099-log.img` = 0099 + sweet-0091sw.adt + 0098 cmdline without sweetiolog, plus
+    sweetdtmode=sweetnull=configd,SpringBoard,backboardd,MobileSafari,PosterBoard,com.apple.WebKit.WebContent,com.apple.WebKit.GPU
+    (cmdline 456 bytes). NOT booted yet.
+    PosterBoard SIGTRAP (0098 log, slide 0x210b0000) symbolicated: NSAssert `!_stateLock_switcherConfiguration` in
+    -[PBFPosterExtensionDataStore _stateLock_setupSwitcherConfigurationForFirstTime]+2040 <- _stateLock_updateExtensions:...
+    +5308 (called when !_stateLock_initialExtensionsLoaded, ivar 0xe9) <- prewarmWithCompletion <- PRSServer XPC. So the
+    switcher configuration (ivar 0x98) already exists while initial extensions are not marked loaded. Why: unknown (guess:
+    an earlier setup path or a failed first pass); expect the reason in the 0099 log.
+    IOSurface selectors seen from WebKit.GPU: 20 = SetPurgeable, 44 = SetOwnershipIdentity (accepted and ignored; unlikely to
+    be the Safari no-content cause). Shared cache again at research/dsc (copied from SystemOS cryptex 087-86593-047.dmg).
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
