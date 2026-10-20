@@ -572,7 +572,10 @@ Separate effort from sweet; sweet handoff below is unchanged.
     sshd did NOT start: port 22 closed; launchd_cache_loader.log says the unsecure cache was sent, launchd.log never names
     com.openssh.sshd. Guess: launchd only bootstraps cache LaunchDaemons keyed under /System/Library/LaunchDaemons/. The job
     key was moved to /System/Library/LaunchDaemons/com.openssh.sshd.plist on the phone (sweet-ssh-setup.py updated);
-    effective next boot. Logs: launchd's own file /private/var/log/com.apple.xpc.launchd/launchd.log. Incremental log pull
+    effective next boot. RESULT (boot ~21:05): port 22 opens ~110 s after boot (launchd now loads the job), but ssh gets
+    "Connection reset": launchd.log shows user/501/com.openssh.sshd.* spawning sh, exit(1) - iOS runs cache
+    LaunchDaemons as mobile without UserName. Phone launchd.plist job now has UserName root / GroupName wheel
+    (sweet-ssh-setup.py too); effective next boot. Logs: launchd's own file /private/var/log/com.apple.xpc.launchd/launchd.log. Incremental log pull
     (newest 4 tracev3 of Persist/Special + timesync, uuidtext copied from the old archive): research/logs-0102.logarchive.
     SSH install (done, see above): `tools/sweet-ssh-setup.py
     research/procursus/bootstrap-ssh-1900.tar.zst research/ssh/id_ed25519.pub` = Procursus rootless 1900 bootstrap into
