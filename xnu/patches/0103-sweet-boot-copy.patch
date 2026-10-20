@@ -1,0 +1,87 @@
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index bb2a2bfd6017..fe1a27ad5616 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -1039,6 +1039,11 @@ bsd_init(void)
+ #endif /* CONFIG_IMAGEBOOT */
+ #endif /* CONFIG_BASESYSTEMROOT */
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	extern void sweet_boot_copy(void);
++	sweet_boot_copy();      /* boot-arg sweetcp=/src:/dst (vfs_syscalls.c) */
++#endif
++
+ 	/* Initialize signal state for process 0. */
+ 	bsd_init_kprintf("calling siginit\n");
+ 	siginit(kernproc);
+diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
+index 7a01a890eed0..9b70df3a0ee8 100644
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -9903,6 +9903,66 @@ sweet_kern_mkdir(const char *path, int mode)
+ 	           UIO_SYSSPACE);
+ }
+ 
++/*
++ * SWEET: boot-arg sweetcp=/src:/dst copies one file with the kernel context
++ * before launchd starts (bsd_init). Recovery path when a file launchd needs
++ * (e.g. /System/Library/xpc/launchd.plist) was broken over the USB file server
++ * and iOS no longer boots far enough to fix it.
++ */
++void sweet_boot_copy(void);
++
++void
++sweet_boot_copy(void)
++{
++	char arg[256];
++	vfs_context_t ctx = vfs_context_kernel();
++	vnode_t svp = NULLVP, dvp = NULLVP;
++	char *buf = NULL;
++	int err;
++
++	if (!PE_parse_boot_argn("sweetcp", arg, sizeof(arg))) {
++		return;
++	}
++	char *dst = strchr(arg, ':');
++	if (dst == NULL || arg[0] != '/' || dst[1] != '/') {
++		printf("SWEET CP: bad sweetcp=%s (want /src:/dst)\n", arg);
++		return;
++	}
++	*dst++ = '\0';
++	buf = kalloc_data(65536, Z_WAITOK);
++	if (buf == NULL) {
++		return;
++	}
++	err = vnode_open(arg, FREAD, 0, 0, &svp, ctx);
++	if (err == 0) {
++		err = vnode_open(dst, O_CREAT | O_TRUNC | FWRITE, 0644, 0, &dvp, ctx);
++	}
++	off_t off = 0;
++	while (err == 0) {
++		int resid = 0;
++		err = vn_rdwr(UIO_READ, svp, buf, 65536, off, UIO_SYSSPACE, IO_NOAUTH,
++		    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++		int n = 65536 - resid;
++		if (err != 0 || n == 0) {
++			break;
++		}
++		err = vn_rdwr(UIO_WRITE, dvp, buf, n, off, UIO_SYSSPACE, IO_NOAUTH | IO_SYNC,
++		    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++		if (err == 0 && resid != 0) {
++			err = ENOSPC;
++		}
++		off += n;
++	}
++	if (dvp != NULLVP) {
++		vnode_close(dvp, FWRITE, ctx);
++	}
++	if (svp != NULLVP) {
++		vnode_close(svp, FREAD, ctx);
++	}
++	kfree_data(buf, 65536);
++	printf("SWEET CP: %s -> %s: %lld bytes, error %d\n", arg, dst, (long long)off, err);
++}
++
+ /* SWEET: symlink(target, path) with kernel-space strings and the kernel context. */
+ int sweet_kern_symlink(const char *target, const char *path);
+ 
