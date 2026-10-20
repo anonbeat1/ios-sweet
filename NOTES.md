@@ -649,7 +649,10 @@ Separate effort from sweet; sweet handoff below is unchanged.
     CPU. xnu 0107 (CI 39494951080) + `mkadt.py --scale 2`: boot-arg sweetfb_scale=2 presents 750x1624 (same 375x812
     points, 2.25x fewer pixels), panel shows the centered 720x1600 scaled 1.5x (nearest neighbour, fColMap/fRowMap);
     ADT display-scale 2 + disp0 canvas 750x1624. Image shim/out/spacewar-xnu-0107-scale2.img (ADT sweet-0107sw-s2.adt,
-    cmdline of 0106 + sweetfb_scale=2). NOT booted yet. Fallback: spacewar-xnu-0106-normal.img (scale 3). GPU research: iOS GLES is GL-over-Metal
+    cmdline of 0106 + sweetfb_scale=2). BOOTED 2026-10-20 ~23:57: "presented as 750x1624", no crash; user: "more fluid,
+    sharpness not great but OK". backboardd while animating ~160-245% (was ~450%). ReportCrash again 65-135% right
+    after boot (more crashes than mediaserverd at boot). Fallback: spacewar-xnu-0106-normal.img (scale 3).
+    Ideas: 3/2 linear filter instead of nearest neighbour for sharpness (cheap: output pixel 1 of 3 = average of 2). GPU research: iOS GLES is GL-over-Metal
       (AppleMetalGLRenderer.bundle; GPU driver AGXMetalA11.bundle); QuartzCore still has CA::OGL::GLESContext and
       CA_ENABLE_OGL; no Metal-over-Vulkan layer exists (only Vulkan-over-Metal). Plan: check whether blur is missing because
       UIKit/MobileGestalt disable it (CA::OGL generic GaussianBlurFilter exists) before anything GPU. Shell PATH: /var/jb/usr/bin:/var/jb/bin:/var/jb/usr/sbin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin.
