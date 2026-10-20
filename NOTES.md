@@ -525,6 +525,38 @@ Separate effort from sweet; sweet handoff below is unchanged.
     an earlier setup path or a failed first pass); expect the reason in the 0099 log.
     IOSurface selectors seen from WebKit.GPU: 20 = SetPurgeable, 44 = SetOwnershipIdentity (accepted and ignored; unlikely to
     be the Safari no-content cause). Shared cache again at research/dsc (copied from SystemOS cryptex 087-86593-047.dmg).
+    0099 BOOTED (2026-10-20 ~19:13, `logs/spacewar-0099.txt`): `|name|` lines arrive (SpringBoard 7818, backboardd 958,
+    MobileSafari 295, configd 137, PosterBoard 65, WebContent 39).
+    **FULL os_log NOW READABLE (0100/0101).** xnu 0100 = kernel file server on 192.168.7.2:5141 (TCP, one request per
+    connection: LS/GET); 0101 = PUT/MKDIR/SYMLINK + include fix (0100 only builds with 0101; CI 39466826643 -> xnu/out-0101);
+    0102 = RM + AppleMobileFileIntegrity IOService (CI 39470264313 -> xnu/out-0102). Host: `tools/sweet-pull.py`
+    (ls/get/mirror/put/untar/logs). `sweet-pull.py logs research/X.logarchive` copies /private/var/db/diagnostics +
+    uuidtext (393 MB, ~6 min). macOS `log show` refuses the archive (missing metadata); Mandiant unifiedlog_iterator v0.7.0
+    (release binary, sha256 checked, scratchpad ul/) parses it: `unifiedlog_iterator -m log-archive -i X.logarchive -o X.jsonl`
+    (17 GB jsonl for all boots since the sweet era; convert to text and delete the jsonl). research/logs-0101.txt (2.6 GB,
+    every boot) and research/logs-0101-current.txt (boot 6874FD62). vmd logs 14.5 M lines over all boots (not looked at).
+    **Wallpaper root cause (observed in lsd's log):** "Failed to read extension point cache at URL ... Unable to find AMFI"
+    -> lsd: "MICopyExtensionCacheEntryWithPlatform: Extension cache does not have an entry for com.apple.posterkit.provider"
+    (same for widgetkit, intents, notification content, ...). ExtensionFoundation +[NSDictionary
+    _EX_dictionaryWithSignedURL:error:] loads /System/Library/xpc/extensions.plist (+ .sig) and asks IOService
+    "AppleMobileFileIntegrity" sel 6 (scalar 1, struct = cdhash; 0 = trusted, 0xe00002f0 = not in trust cache). 0102 adds
+    that service (sel 6 -> success; others unsupported + logged). The LS database was built without these extension
+    points, so it must be rebuilt: delete /private/var/mobile/Containers/Data/InternalDaemon/593B02F7-EB91-404F-8F2E-
+    3C0281356BD9/Library/Caches/com.apple.LaunchServices-4035-v2.csstore (`sweet-pull.py` has no rm yet: RM is in 0102)
+    - NOT done, needs user OK.
+    **Safari no-content root cause (observed + RE):** WKWebView "have not received a commit ... lastTransactionID 0";
+    WebContent fault in RemoteImageBufferProxy::ensureBackendCreated (GPU process never created image buffers); WebKit.GPU
+    creates IOSurfaces 'b3a8' (RGB10A8, 2 planes) / 'w30r' (RGB10) = deep color. WebCore screenSupportsExtendedColor ->
+    MGGetBoolAnswer("Aixt/MEN2O2B7f+8m4TxUA") = HasExtendedColorDisplay = (ArtworkDisplayGamut == "P3"); ArtworkDisplayGamut
+    = /product artwork-display-gamut, which the D22AP /product copied by mkadt says "P3". mkadt now writes "sRGB"
+    (`shim/out/sweet-0102sw.adt`). Image `shim/out/spacewar-xnu-0102-srgb.img` = 0102 + sweet-0102sw.adt + cmdline of 0101
+    (sweetdtmode/sweetnull += lsd). NOT booted yet. Expect: Safari renders (guess), extension point cache loads.
+    SSH plan (user asked for apps/tweaks/terminal; NOT done yet, needs user OK before writing): `tools/sweet-ssh-setup.py
+    research/procursus/bootstrap-ssh-1900.tar.zst research/ssh/id_ed25519.pub` = Procursus rootless 1900 bootstrap into
+    /var/jb (4982 files, 1151 symlinks, 451 dirs), /bin/sh -> /var/jb/bin/sh, /var/root/.ssh/authorized_keys, sshd job
+    (port 22, inetd) added to the phone's /System/Library/xpc/launchd.plist (backup research/launchd.plist.pre-ssh and
+    on the phone .pre-ssh). Root password in /etc/master.passwd = alpine. Later: DYLD_INSERT_LIBRARIES via the AMFI dyld
+    policy bits (0099) for ElleKit tweaks; app registration needs the LS rebuild.
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
