@@ -631,8 +631,12 @@ Separate effort from sweet; sweet handoff below is unchanged.
       `chown -R 501:501 /var/jb/var/mobile` -> **SILEO OPENS** (user, ~22:50). TODO: sweet-pull.py untar has no chown.
       Also: our HFS has no data-protection classes (SQLite logs "volume does not support data protection"); apps that
       require F_SETPROTECTIONCLASS to succeed may fail.
-      Downloads to the phone are ~4-5 KB/s (apt index 342 kB in 83 s) while phone->Mac is ~1 MB/s: suspect the USB gadget
-      RX path (one OUT buffer re-armed per poll) - next to fix. GPU research: iOS GLES is GL-over-Metal
+      Download speed MEASURED (2026-10-20 ~23:00): USB link Mac->phone 1151 KB/s, phone->Mac 1115 KB/s (8 MB over ssh);
+      phone from speed.cloudflare.com 5 MB in ~5 s through the Mac NAT. The slow apt/Sileo downloads (~5 KB/s) are the
+      Procursus server: the Mac itself took 319 s for the 2.9 MB Sileo .deb from apt.procurs.us (Cloudflare: 15 MB/s).
+      Earlier guess "USB RX path" was WRONG for that symptom. Real link ceiling: ~1 frame per 1 ms poll (one RX TRB,
+      one TX TRB, ud_sleep_ms(1) in ud_thread) ~= 1.1 MB/s; more TRBs per endpoint + interrupt/shorter poll could
+      reach several MB/s (USB 2.0 high speed). GPU research: iOS GLES is GL-over-Metal
       (AppleMetalGLRenderer.bundle; GPU driver AGXMetalA11.bundle); QuartzCore still has CA::OGL::GLESContext and
       CA_ENABLE_OGL; no Metal-over-Vulkan layer exists (only Vulkan-over-Metal). Plan: check whether blur is missing because
       UIKit/MobileGestalt disable it (CA::OGL generic GaussianBlurFilter exists) before anything GPU. Shell PATH: /var/jb/usr/bin:/var/jb/bin:/var/jb/usr/sbin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin.
