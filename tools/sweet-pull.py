@@ -8,10 +8,11 @@
                                        then: log show --archive OUT.logarchive
   sweet-pull.py put LOCAL PATH [MODE]  install one file (mode octal, default 644)
   sweet-pull.py untar TAR[.zst]        install a tar's dirs/files/symlinks under /
+  sweet-pull.py rm FILE                delete one file (xnu 0102)
 
 Protocol: TCP 192.168.7.2:5141, one request per connection ("LS /dir",
 "GET /file", "PUT mode size /file" + bytes, "MKDIR mode /dir",
-"SYMLINK /link target"); reply "OK" / "OK <size>" or "ERR <errno>".
+"SYMLINK /link target", "RM /file"); reply "OK" / "OK <size>" or "ERR <errno>".
 """
 import os
 import plistlib
@@ -137,6 +138,8 @@ def main(a):
         put(open(a[1], 'rb').read(), a[2], int(a[3], 8) if len(a) > 3 else 0o644)
     elif len(a) == 2 and a[0] == 'untar':
         untar(a[1])
+    elif len(a) == 2 and a[0] == 'rm':
+        command(f'RM {a[1]}')
     else:
         sys.exit(__doc__)
 
