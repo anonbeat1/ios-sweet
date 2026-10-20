@@ -453,6 +453,15 @@ Separate effort from sweet; sweet handoff below is unchanged.
     **xnu 0094** (`0094-sweet-usblog-from-boot.patch`): live log streams from ring position 0 (whole console since boot,
     4 MiB ring) and waits 15 s after USB is configured before the first send.
     0094 CI 39450657924 success -> `xnu/out-0094`; image `shim/out/spacewar-xnu-0094-daily.img` (same cmdline as 0092-daily).
+    **0094 boot (17:48, log saved as `logs/spacewar-0094.txt`; the user wrote it to spacewar-0093.txt): log now from boot.**
+    Chain: "SWEET SMMU: sid 0xe0 already matched by smr 6 (smr 0x800000e0 s2cr 0x5)" -> repointed "s2cr now 0x7" (CONFIRMS
+    the duplicate-SMR hypothesis: ABL had SMR 6 for the USB stream, translating to cb 5); "SWEET NET: IOKit interface ue0
+    published (... stack up)"; configd exec'd; "SWEET NET: configd opened IONetworkStack (type 0)" (InterfaceNamer found the
+    stack). Then NO configd/IPConfiguration route or address change (0080 rtsock/ifaddr trace silent), 0 packets
+    forwarded by the Mac. Also "CRASH driverkitd sig 9". Unverified candidate: PreferencesMonitor's
+    updatePreConfiguredConfiguration() needs SCNetworkSetCopyCurrent(prefs) (an existing current set); this fresh image with
+    no Wi-Fi/cellular may have none. Next: image `shim/out/spacewar-xnu-0094-iolog.img` (= 0094-daily + sweetiolog=configd)
+    to see configd's IOKit calls (does PreferencesMonitor look ue0 up by BSD name = findInterfaces ran?).
   - Touch plan: bring-up in the shim first (RPMh ldoc8/ldoc3, pins, GENI SPI FIFO, FT3680 reset + chip id 0x5662), then port
     to the kernel with firmware download and HID digitizer events (SweetHID).
   - Next for Spacewar: (1) re-boot `spacewar-xnu-0087-fast.img` (console off) to time a warm boot; (2) buttons: PMK8350 PON
