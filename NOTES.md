@@ -660,7 +660,8 @@ Separate effort from sweet; sweet handoff below is unchanged.
     /Applications/Sileo.app/ (no Info.plist) with symlink Sileo -> /var/jb/Applications/Sileo.app/Sileo. Then Sileo
     lists "procurs" + an "untitled repo" (not investigated). Added Chariz: /var/jb/etc/apt/sources.list.d/chariz.sources
     (chariz-keyring was already installed); installed ws.hbang.newterm3 3.0~beta1 (iphoneos-arm64) with apt;
-    `uicache -l` -> ws.hbang.Terminal /private/var/jb/Applications/NewTerm.app.
+    `uicache -l` -> ws.hbang.Terminal /private/var/jb/Applications/NewTerm.app. User: NewTerm WORKS (first third-party
+    app running on the phone).
     Messages (MobileSMS) crash: SIGSEGV at pc 0 in CI::GLContext::GLContext <- +[CIContext internalContextWithEAGLContext:]
     <- -[CIContext initWithOptions:] <- MobileIcons _MI_sharedIconCompositorContext / LICGImageCreateCoreImageLanczosScaled
     (icon compositing). iOS 16 CoreImage has only CI::GLContext and CI::MetalContext (no CPU context); initWithOptions
