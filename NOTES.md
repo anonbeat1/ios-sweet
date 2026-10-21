@@ -1173,3 +1173,5 @@ xnu 0108 (CI 39616339120): iokit/Kernel/arm/SweetWpss.cpp, boot-arg wpss=1 (wpss
 started from AppleCLCD::start, logs "SWEET WPSS: ...". Needs the firmware on the phone root:
 /usr/share/firmware/spacewar/wpss/wpss.{mdt,b00..b07}. CI passed -> xnu/out-0108; image
 shim/out/spacewar-xnu-0108-wpss.img (= 0107-scale2 cmdline + wpss=1, ADT sweet-0107sw-s2). NOT booted yet.
+Firmware installed on the phone 2026-10-21 ~16:45: /usr/share/firmware/spacewar/wpss/wpss.{mdt,b00..b07}
+(root:wheel 644, sha256 identical to research/wpss-fw/image/).
