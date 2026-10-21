@@ -1,0 +1,229 @@
+diff --git a/iokit/Kernel/arm/SweetWpss.cpp b/iokit/Kernel/arm/SweetWpss.cpp
+index 00cf3c6acb60..b4911b9eb9d1 100644
+--- a/iokit/Kernel/arm/SweetWpss.cpp
++++ b/iokit/Kernel/arm/SweetWpss.cpp
+@@ -728,6 +728,34 @@ glink_send(const void *data, uint32_t len)
+ 
+ /* ---------------------------------------------------------------- QRTR */
+ 
++static void wlfw_rx(const uint8_t *d, uint32_t len);
++static void wlfw_arrive(uint32_t node, uint32_t port);
++
++#define PORT_WLFWC          0x4004              /* our QMI client port towards WLFW */
++#define QMI_REQ             0
++#define QMI_RESP            2
++#define QMI_IND             4
++/* ath11k QMI_WLANFW_* message ids (ipq/wcn ath11k qmi.h) */
++#define WLFW_IND_REGISTER   0x0020
++#define WLFW_FW_READY_IND   0x0021
++#define WLFW_HOST_CAP       0x0034
++#define WLFW_REQUEST_MEM_IND 0x0035
++#define WLFW_RESPOND_MEM    0x0036
++#define WLFW_MEM_READY_IND  0x0037
++#define WLFW_FW_INIT_DONE_IND 0x0038
++#define WLFW_CAP            0x0024
++#define WLFW_BDF_DOWNLOAD   0x0025
++#define WLFW_M3_INFO        0x003C
++#define WLFW_WLAN_MODE      0x0022
++#define WLFW_WLAN_CFG       0x0023
++#define WLFW_CLIENT_ID      0x4b4e454c
++
++static uint32_t w_node, w_port;
++static uint16_t w_txn = 1;
++static const char *w_step = "not started";
++
++
++
+ static void
+ qrtr_send(uint32_t type, uint32_t src_port, uint32_t dst_node, uint32_t dst_port, const void *payload, uint32_t len)
+ {
+@@ -824,15 +852,18 @@ qrtr_rx(const uint8_t *p, uint32_t len)
+ 		}
+ 		if (c->a == QMI_SVC_WLFW) {
+ 			LOG("t=%u ms: *** WLFW service 0x45 up: inst %x node %u port %x ***", g_ms, c->b, c->c, c->d);
++			wlfw_arrive(c->c, c->d);
+ 		}
+ 		break;
+ 	case QRTR_TYPE_DATA:
+ 		if (confirm) {
+-			/* the full 20-byte control packet (Linux qrtr_send_resume_tx): 12 bytes stalls the modem */
++			/* the full 20-byte control packet (Linux qrtr_send_resume_tx): 12 bytes stalls the WPSS */
+ 			struct qrtr_ctrl r = { QRTR_TYPE_RESUME_TX, QRTR_NODE_APPS, dst_port, 0, 0 };
+ 			qrtr_send(QRTR_TYPE_RESUME_TX, dst_port, src_node, src_port, &r, sizeof(r));
+ 		}
+-		(void)size;                             /* no QMI services of ours yet */
++		if (dst_port == PORT_WLFWC && hlen + size <= len) {
++			wlfw_rx(p + hlen, size);
++		}
+ 		break;
+ 	case QRTR_TYPE_RESUME_TX:
+ 		q_resumes++;
+@@ -1061,6 +1092,168 @@ glink_summary(void)
+ 	}
+ }
+ 
++/* ---------------------------------------------------------------- WLFW QMI (ath11k) */
++
++/* QMI message = type(1) txn(2) msgid(2) len(2) then TLVs {type(1) len(2) value}. */
++struct wmsg { uint8_t *b; uint32_t n; };
++
++static bool
++wm_new(struct wmsg *m, uint16_t msg)
++{
++	m->b = (uint8_t *)IOMalloc(2048);
++	if (m->b == NULL) {
++		return false;
++	}
++	bzero(m->b, 2048);
++	m->b[0] = QMI_REQ;
++	uint16_t t = w_txn++;
++	memcpy(m->b + 1, &t, 2);
++	memcpy(m->b + 3, &msg, 2);
++	m->n = 7;
++	return true;
++}
++
++static void
++wm_tlv(struct wmsg *m, uint8_t type, const void *v, uint16_t len)
++{
++	m->b[m->n] = type;
++	memcpy(m->b + m->n + 1, &len, 2);
++	if (len != 0) {
++		memcpy(m->b + m->n + 3, v, len);
++	}
++	m->n += 3 + len;
++}
++static void wm_u8(struct wmsg *m, uint8_t t, uint8_t v) { wm_tlv(m, t, &v, 1); }
++static void wm_u32(struct wmsg *m, uint8_t t, uint32_t v) { wm_tlv(m, t, &v, 4); }
++
++static void
++wm_send(struct wmsg *m)
++{
++	uint16_t l = (uint16_t)(m->n - 7);
++	memcpy(m->b + 5, &l, 2);
++	qrtr_send(QRTR_TYPE_DATA, PORT_WLFWC, w_node, w_port, m->b, m->n);
++	IOFree(m->b, 2048);
++}
++
++static const uint8_t *
++qm_find(const uint8_t *d, uint32_t len, uint8_t type, uint16_t *tlen)
++{
++	uint32_t o = 7;
++	while (o + 3 <= len) {
++		uint16_t l;
++		memcpy(&l, d + o + 1, 2);
++		if (o + 3 + l > len) {
++			break;
++		}
++		if (d[o] == type) {
++			*tlen = l;
++			return d + o + 3;
++		}
++		o += 3 + l;
++	}
++	return NULL;
++}
++
++static bool
++w_result(const uint8_t *d, uint32_t len, uint16_t *err)
++{
++	uint16_t l = 0;
++	const uint8_t *r = qm_find(d, len, 2, &l);
++	uint16_t res = 0xFFFF;
++	*err = 0xFFFF;
++	if (r != NULL && l >= 4) {
++		memcpy(&res, r, 2);
++		memcpy(err, r + 2, 2);
++	}
++	return res == 0;
++}
++
++/* Hex of the first n bytes, for learning the real ath11k sequence. */
++static void
++w_hex(const char *what, const uint8_t *d, uint32_t len)
++{
++	char hex[64 * 3 + 1];
++	size_t o = 0;
++	for (uint32_t i = 0; i < len && i < 64; i++) {
++		o += (size_t)snprintf(hex + o, sizeof(hex) - o, "%02x ", d[i]);
++	}
++	LOG("wlfw %s: %u bytes: %s", what, len, hex);
++}
++
++/* ath11k host_cap: minimal, non-fatal if rejected; we iterate from the FW's replies. */
++static void
++w_send_host_cap(void)
++{
++	struct wmsg m;
++	if (!wm_new(&m, WLFW_HOST_CAP)) {
++		return;
++	}
++	wm_u32(&m, 0x10, 1);            /* num_clients = 1 */
++	wm_u8(&m, 0x16, 1);            /* bdf_support_valid/enable */
++	wm_u8(&m, 0x1b, 1);            /* m3_support */
++	wm_u8(&m, 0x1c, 1);            /* m3_cache_support */
++	wm_send(&m);
++	w_step = "host_cap sent";
++}
++
++static void
++wlfw_arrive(uint32_t node, uint32_t port)
++{
++	struct wmsg m;
++	if (w_node != 0 || w_port != 0) {
++		return;
++	}
++	w_node = node;
++	w_port = port;
++	if (wm_new(&m, WLFW_IND_REGISTER)) {
++		wm_u8(&m, 0x10, 1);        /* fw_ready_enable */
++		wm_u8(&m, 0x11, 1);        /* initiate_cal_download_enable */
++		wm_u8(&m, 0x12, 1);        /* initiate_cal_update_enable */
++		wm_u8(&m, 0x13, 1);        /* msa_ready_enable */
++		wm_u8(&m, 0x14, 1);        /* pin_connect_result_enable */
++		wm_u32(&m, 0x15, WLFW_CLIENT_ID);
++		wm_u8(&m, 0x16, 1);        /* request_mem_enable (ath11k) */
++		wm_u8(&m, 0x17, 1);        /* fw_mem_ready_enable (ath11k) */
++		wm_u8(&m, 0x18, 1);        /* fw_init_done_enable (ath11k) */
++		wm_send(&m);
++		w_step = "ind_register sent";
++		LOG("t=%u ms: wlfw: ind_register sent to node %u port %x", g_ms, node, port);
++	}
++}
++
++static void
++wlfw_rx(const uint8_t *d, uint32_t len)
++{
++	uint16_t msg, err = 0;
++
++	if (len < 7) {
++		return;
++	}
++	memcpy(&msg, d + 3, 2);
++	if (d[0] == QMI_IND) {
++		LOG("t=%u ms: wlfw INDICATION msg %04x, step=%s", g_ms, msg, w_step);
++		w_hex("ind", d, len);
++		return;
++	}
++	if (d[0] != QMI_RESP) {
++		return;
++	}
++	bool ok = w_result(d, len, &err);
++	LOG("t=%u ms: wlfw RESP msg %04x %s err %u, step=%s", g_ms, msg, ok ? "ok" : "FAIL", err, w_step);
++	w_hex("resp", d, len);
++	switch (msg) {
++	case WLFW_IND_REGISTER:
++		w_send_host_cap();
++		break;
++	case WLFW_HOST_CAP:
++		/* ath11k next sends REQUEST_MEM indication; we only observe for now. */
++		w_step = "host_cap done, waiting for the FW to drive";
++		break;
++	default:
++		break;
++	}
++}
++
+ /*
+  * After auth_and_reset: watch the WPSS's "slave-kernel" entry (bit0 fatal, bit1 ready,
+  * bit2 handover) and log every change; on fatal print the crash reason (SMEM item 626).
