@@ -1247,3 +1247,10 @@ WCN6750 is fixed_fw_mem = true, so NO request_mem/fw_mem_ready; sequence ind_reg
 target_cap(cap) -> device_info -> BDF -> FW ready. host_cap TLV ids were wrong in 0117 (0x16=m3_support,
 0x1b=mem_bucket u32, not bdf/m3). xnu 0118 (CI 39639214326): ind_register = fw_ready(0x10) + client_id(0x15)
 + fw_init_done(0x18) + cal_done(0x1b), no mem enables; host_cap = num_clients(0x10)=1 only, then observe.
+0118 RESULT: ind_register ok AND host_cap ok (result 0). Full WCN6750 sequence (ath11k qmi.c
+event_server_arrive + event_load_bdf): ind_register -> host_cap -> cap(0x0024) -> device_info(0x004C) ->
+load_bdf regdb (type 4 = REGDB) -> load_bdf board (bdwlan.elf, type 1 = ELF) -> FW_READY ind -> wlan_cfg
+-> wlan_mode(mission). cap resp TLVs: 0x10 chip_info(chip_id,family), 0x11 board_info(board_id), 0x12
+soc. BDF req (0x0025): 0x01 valid, 0x10 file_id=0, 0x11 total_size, 0x12 seg_id, 0x13 data(u16 len+bytes,
+<=6144), 0x14 end, 0x15 bdf_type. xnu 0119 (CI 39641453575): cap -> device_info -> regdb.bin -> bdwlan.elf,
+segmented. NEEDS regdb.bin + bdwlan.elf on the phone at /usr/share/firmware/spacewar/wpss/.
