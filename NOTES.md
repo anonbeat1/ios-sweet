@@ -1179,3 +1179,8 @@ Firmware installed on the phone 2026-10-21 ~16:45: /usr/share/firmware/spacewar/
 found (mappings + SMEM parsing OK), then "PAS id 6 supported: ret=0 res=0" -> stopped (TZ says not supported,
 although Android boots WPSS with pas-id 6). xnu 0109 (CI 39619347976): is_supported advisory, logs x0-x3,
 queries SVC_INFO IS_CALL_AVAIL for PIL cmds 1..7, then tries init_image anyway.
+0109 RESULT: IS_CALL_AVAIL res=1 for PIL 1,2,5,6,7 (init_image, mem_setup, auth_reset, shutdown,
+is_supported), 0 for 3,4 (unused) -> the SCM interface is right; is_supported(6) still res=0 (x2 x3 0).
+Stopped at "split hash segment": wpss.mdt = headers (340) + hash (6848) concatenated, hash p_offset 0x1000
+(the .b01 is the same bytes). topaz's loader only takes the hash at p_offset. xnu 0110 (CI 39621790603): take
+it right after the headers when hdr + filesz == mdt size (Linux qcom_mdt_read_metadata).
