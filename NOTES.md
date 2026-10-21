@@ -1171,4 +1171,5 @@ pool 0xB0000000+16 MB. topaz does no power votes; Linux sends AOP QMP "load_stat
 rpmhpd votes for WPSS: suspect #1 if auth_and_reset/READY fail.
 xnu 0108 (CI 39616339120): iokit/Kernel/arm/SweetWpss.cpp, boot-arg wpss=1 (wpss_watch=N seconds),
 started from AppleCLCD::start, logs "SWEET WPSS: ...". Needs the firmware on the phone root:
-/usr/share/firmware/spacewar/wpss/wpss.{mdt,b00..b07}. NOT booted yet.
+/usr/share/firmware/spacewar/wpss/wpss.{mdt,b00..b07}. CI passed -> xnu/out-0108; image
+shim/out/spacewar-xnu-0108-wpss.img (= 0107-scale2 cmdline + wpss=1, ADT sweet-0107sw-s2). NOT booted yet.
