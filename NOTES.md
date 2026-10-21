@@ -1320,5 +1320,10 @@ CoreImage client. Agent plan: research/coreimage-plan.md (gitignored; cache addr
   quiet. build/ gitignored.
 - To apply: boot the 0121 kernel; copy build/cicpu.dylib -> /var/jb/usr/lib/cicpu.dylib (755); inject via
   DYLD_INSERT_LIBRARIES for MobileSMS/Photos. Injection path unverified on iOS: try launchd setenv, else
-  a kernel sweetinsert= boot-arg (like sweet_exec_dtmode in kern_exec.c, not written yet). Verify: console
-  "cicpu: CIContext hooks installed (gpu=0)", "initWithOptions: -> nil", no CI::GLContext crash.
+  a kernel sweetinsert= boot-arg (DONE: xnu 0122). Verify: console "cicpu: CIContext hooks installed (gpu=0)".
+- TEST (2026-10-21 ~20:05, 0121 booted): running MobileSMS by hand over ssh with
+  DYLD_INSERT_LIBRARIES=/var/jb/usr/lib/cicpu.dylib printed "cicpu: CIContext hooks installed (gpu=0)" -> the
+  kernel honours DYLD_INSERT (0121 works), tweak loads. For auto-injection on tap: xnu 0122 boot-arg
+  sweetinsert=<procs> (comma basenames; sweetinsertlib= overrides the dylib path, default cicpu.dylib) adds
+  DYLD_INSERT_LIBRARIES in exec_extract_strings next to sweetdtmode. Image spacewar-xnu-0122-ci.img has
+  sweetinsert=MobileSMS. cicpu.dylib on the phone at /var/jb/usr/lib (sha verified).
