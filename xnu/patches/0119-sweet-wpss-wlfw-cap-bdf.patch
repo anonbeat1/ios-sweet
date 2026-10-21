@@ -1,0 +1,207 @@
+diff --git a/iokit/Kernel/arm/SweetWpss.cpp b/iokit/Kernel/arm/SweetWpss.cpp
+index 369fe519a3e1..5d4f2f56eecb 100644
+--- a/iokit/Kernel/arm/SweetWpss.cpp
++++ b/iokit/Kernel/arm/SweetWpss.cpp
+@@ -242,6 +242,24 @@ fw_read(const char *name, void *dst, uint64_t max)
+ 	return err != 0 ? -1 : (int64_t)done;
+ }
+ 
++static int64_t
++fw_read_at(const char *name, uint64_t off, void *dst, uint64_t n)
++{
++	char path[96];
++	vnode_t vp = NULLVP;
++	vfs_context_t ctx = vfs_context_kernel();
++	int resid = 0, err;
++
++	snprintf(path, sizeof(path), FW_DIR "%s", name);
++	if (vnode_open(path, FREAD, 0, 0, &vp, ctx) != 0) {
++		return -1;
++	}
++	err = vn_rdwr(UIO_READ, vp, (caddr_t)dst, (int)n, (off_t)off, UIO_SYSSPACE, 0,
++	    vfs_context_ucred(ctx), &resid, current_proc());
++	vnode_close(vp, FREAD, ctx);
++	return err != 0 ? -1 : (int64_t)(n - resid);
++}
++
+ static int64_t
+ fw_size(const char *name)
+ {
+@@ -748,11 +766,20 @@ static void wlfw_arrive(uint32_t node, uint32_t port);
+ #define WLFW_M3_INFO        0x003C
+ #define WLFW_WLAN_MODE      0x0022
+ #define WLFW_WLAN_CFG       0x0023
++#define WLFW_DEVICE_INFO    0x004C
++#define WLFW_SEG            6144               /* QMI_WLFW_MAX_DATA_SIZE_V01 */
++#define BDF_TYPE_ELF        1
++#define BDF_TYPE_REGDB      4
+ #define WLFW_CLIENT_ID      0x4b4e454c
+ 
+-static uint32_t w_node, w_port;
++static uint32_t w_node, w_port, w_board = 0xFF, w_chip;
+ static uint16_t w_txn = 1;
+ static const char *w_step = "not started";
++/* BDF download state: regdb first, then bdwlan.elf, each in <=6144-byte segments. */
++static const char *w_bdf_name;
++static uint8_t w_bdf_type;
++static uint32_t w_bdf_len, w_bdf_off, w_bdf_seg;
++static bool w_regdb_done;
+ 
+ 
+ 
+@@ -1100,11 +1127,11 @@ struct wmsg { uint8_t *b; uint32_t n; };
+ static bool
+ wm_new(struct wmsg *m, uint16_t msg)
+ {
+-	m->b = (uint8_t *)IOMalloc(2048);
++	m->b = (uint8_t *)IOMalloc(8192);
+ 	if (m->b == NULL) {
+ 		return false;
+ 	}
+-	bzero(m->b, 2048);
++	bzero(m->b, 8192);
+ 	m->b[0] = QMI_REQ;
+ 	uint16_t t = w_txn++;
+ 	memcpy(m->b + 1, &t, 2);
+@@ -1132,7 +1159,7 @@ wm_send(struct wmsg *m)
+ 	uint16_t l = (uint16_t)(m->n - 7);
+ 	memcpy(m->b + 5, &l, 2);
+ 	qrtr_send(QRTR_TYPE_DATA, PORT_WLFWC, w_node, w_port, m->b, m->n);
+-	IOFree(m->b, 2048);
++	IOFree(m->b, 8192);
+ }
+ 
+ static const uint8_t *
+@@ -1180,6 +1207,16 @@ w_hex(const char *what, const uint8_t *d, uint32_t len)
+ 	LOG("wlfw %s: %u bytes: %s", what, len, hex);
+ }
+ 
++static void
++w_simple(uint16_t msg, const char *step)
++{
++	struct wmsg m;
++	if (wm_new(&m, msg)) {
++		wm_send(&m);
++		w_step = step;
++	}
++}
++
+ /* ath11k host_cap: minimal, non-fatal if rejected; we iterate from the FW's replies. */
+ static void
+ w_send_host_cap(void)
+@@ -1193,6 +1230,56 @@ w_send_host_cap(void)
+ 	w_step = "host_cap sent";
+ }
+ 
++static void
++w_bdf_segment(void)
++{
++	struct wmsg m;
++	uint32_t chunk = MIN(w_bdf_len - w_bdf_off, (uint32_t)WLFW_SEG);
++	bool end = w_bdf_off + chunk >= w_bdf_len;
++
++	if (!wm_new(&m, WLFW_BDF_DOWNLOAD)) {
++		return;
++	}
++	wm_u8(&m, 0x01, 1);                    /* valid */
++	wm_u32(&m, 0x10, 0);                   /* file_id = 0 (ELF/REGDB) */
++	wm_u32(&m, 0x11, w_bdf_len);           /* total_size */
++	wm_u32(&m, 0x12, w_bdf_seg);           /* seg_id */
++	uint8_t *t = m.b + m.n;                /* data TLV: u16 len + bytes */
++	uint16_t tl = (uint16_t)(2 + chunk), dl = (uint16_t)chunk;
++	t[0] = 0x13;
++	memcpy(t + 1, &tl, 2);
++	memcpy(t + 3, &dl, 2);
++	if (fw_read_at(w_bdf_name, w_bdf_off, t + 5, chunk) != (int64_t)chunk) {
++		LOG("wlfw: %s read failed at %u", w_bdf_name, w_bdf_off);
++		IOFree(m.b, 8192);
++		return;
++	}
++	m.n += 5 + chunk;
++	wm_u8(&m, 0x14, end ? 1 : 0);          /* end */
++	wm_u8(&m, 0x15, w_bdf_type);           /* bdf_type */
++	wm_send(&m);
++	w_bdf_off += chunk;
++	w_bdf_seg++;
++	w_step = "bdf download";
++}
++
++static void
++w_start_bdf(const char *name, uint8_t type)
++{
++	int64_t sz = fw_size(name);
++	if (sz <= 0) {
++		LOG("wlfw: %s missing (%lld); skipping", name, sz);
++		return;
++	}
++	w_bdf_name = name;
++	w_bdf_type = type;
++	w_bdf_len = (uint32_t)sz;
++	w_bdf_off = 0;
++	w_bdf_seg = 0;
++	LOG("t=%u ms: wlfw: downloading %s type %u, %u bytes", g_ms, name, type, w_bdf_len);
++	w_bdf_segment();
++}
++
+ static void
+ wlfw_arrive(uint32_t node, uint32_t port)
+ {
+@@ -1234,17 +1321,56 @@ wlfw_rx(const uint8_t *d, uint32_t len)
+ 	bool ok = w_result(d, len, &err);
+ 	LOG("t=%u ms: wlfw RESP msg %04x %s err %u, step=%s", g_ms, msg, ok ? "ok" : "FAIL", err, w_step);
+ 	w_hex("resp", d, len);
++	uint16_t l = 0;
++	const uint8_t *v;
++	struct wmsg m;
+ 	switch (msg) {
+ 	case WLFW_IND_REGISTER:
+ 		w_send_host_cap();
+ 		break;
+ 	case WLFW_HOST_CAP:
+-		/* ath11k next sends REQUEST_MEM indication; we only observe for now. */
+-		w_step = "host_cap done, waiting for the FW to drive";
++		/* WCN6750 (fixed_fw_mem): host drives cap -> device_info -> BDF. */
++		w_simple(WLFW_CAP, "cap sent");
++		break;
++	case WLFW_CAP:
++		if ((v = qm_find(d, len, 0x10, &l)) != NULL && l >= 4) {
++			memcpy(&w_chip, v, 4);
++		}
++		if ((v = qm_find(d, len, 0x11, &l)) != NULL && l >= 4) {
++			memcpy(&w_board, v, 4);
++		}
++		LOG("wlfw: chip_id %x board_id %x", w_chip, w_board);
++		w_simple(WLFW_DEVICE_INFO, "device_info sent");
++		break;
++	case WLFW_DEVICE_INFO:
++		if ((v = qm_find(d, len, 0x10, &l)) != NULL && l >= 8) {
++			uint64_t bar = 0;
++			memcpy(&bar, v, 8);
++			LOG("wlfw: device bar_addr %llx", bar);
++		}
++		/* regdb first (supports_regdb), then the board file. */
++		w_start_bdf("regdb.bin", BDF_TYPE_REGDB);
++		break;
++	case WLFW_BDF_DOWNLOAD:
++		if (!ok) {
++			LOG("wlfw: bdf segment %u FAILED err %u", w_bdf_seg - 1, err);
++			break;
++		}
++		if (w_bdf_off < w_bdf_len) {
++			w_bdf_segment();
++		} else if (!w_regdb_done) {
++			w_regdb_done = true;
++			LOG("wlfw: regdb sent (%u segments)", w_bdf_seg);
++			w_start_bdf("bdwlan.elf", BDF_TYPE_ELF);
++		} else {
++			LOG("t=%u ms: *** board data (bdwlan.elf) sent, %u segments; waiting for FW_READY ***", g_ms, w_bdf_seg);
++			w_step = "waiting FW_READY";
++		}
+ 		break;
+ 	default:
+ 		break;
+ 	}
++	(void)m;
+ }
+ 
+ /*
