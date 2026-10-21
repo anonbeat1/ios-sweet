@@ -1,0 +1,95 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 31d25c45317d..22dbfd1ceba2 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5550,18 +5550,9 @@ bad:
+  * log: a way to read a daemon's own logs without logd.
+  */
+ static bool
+-sweet_exec_dtmode(const char *path)
++sweet_list_has(const char *names, const char *path)
+ {
+-	static char names[256];
+-	static int parsed;
+-
+-	if (!parsed) {
+-		if (!PE_parse_boot_argn("sweetdtmode", names, sizeof(names))) {
+-			names[0] = '\0';
+-		}
+-		parsed = 1;
+-	}
+-	if (names[0] == '\0' || path == NULL) {
++	if (names == NULL || names[0] == '\0' || path == NULL) {
+ 		return false;
+ 	}
+ 	const char *base = path;
+@@ -5584,6 +5575,45 @@ sweet_exec_dtmode(const char *path)
+ 	}
+ 	return false;
+ }
++
++static bool
++sweet_exec_dtmode(const char *path)
++{
++	static char names[256];
++	static int parsed;
++
++	if (!parsed) {
++		if (!PE_parse_boot_argn("sweetdtmode", names, sizeof(names))) {
++			names[0] = '\0';
++		}
++		parsed = 1;
++	}
++	return sweet_list_has(names, path);
++}
++
++/*
++ * SWEET: processes named in boot-arg sweetinsert get
++ * DYLD_INSERT_LIBRARIES=/var/jb/usr/lib/cicpu.dylib in their environment
++ * (xnu 0121 made the AMFI dyld policy allow DYLD_* env vars). The dylib path
++ * is boot-arg sweetinsertlib, default /var/jb/usr/lib/cicpu.dylib.
++ */
++static const char *
++sweet_exec_insert(const char *path)
++{
++	static char names[256], lib[160];
++	static int parsed;
++
++	if (!parsed) {
++		if (!PE_parse_boot_argn("sweetinsert", names, sizeof(names))) {
++			names[0] = '\0';
++		}
++		if (!PE_parse_boot_argn("sweetinsertlib", lib, sizeof(lib))) {
++			strlcpy(lib, "/var/jb/usr/lib/cicpu.dylib", sizeof(lib));
++		}
++		parsed = 1;
++	}
++	return sweet_list_has(names, path) ? lib : NULL;
++}
+ #endif
+ 
+ /*
+@@ -5811,6 +5841,23 @@ exec_extract_strings(struct image_params *imgp)
+ 		imgp->ip_argspace -= new_ptr_size;
+ 		imgp->ip_envc++;
+ 	}
++	{
++		const char *lib = sweet_exec_insert(imgp->ip_strings + strlen(EXECUTABLE_KEY));
++		if (lib != NULL) {
++			char env[192];
++			snprintf(env, sizeof(env), "DYLD_INSERT_LIBRARIES=%s", lib);
++			error = exec_add_user_string(imgp, CAST_USER_ADDR_T(env), UIO_SYSSPACE, TRUE);
++			if (error) {
++				goto bad;
++			}
++			if (imgp->ip_argspace < new_ptr_size) {
++				error = E2BIG;
++				goto bad;
++			}
++			imgp->ip_argspace -= new_ptr_size;
++			imgp->ip_envc++;
++		}
++	}
+ #endif
+ 
+ 	/* Save space for envv[] NULL terminator */
