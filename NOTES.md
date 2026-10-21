@@ -1224,3 +1224,7 @@ direction (found by the gpt-6-astra brainstorm agent). Sequence that works: SMEM
 (master-kernel, wlan) -> auth_and_reset -> READY. (Whether QMP/ARC are strictly needed is untested.)
 Next = Wi-Fi step 2: GLINK over SMEM (items 478 desc / 479 tx / 480 rx with the WPSS) + QRTR, from topaz
 0118/0121; then wlfw QMI (0122) with the WCN6750 board data (research/wpss-fw/image/qca6750/).
+xnu 0116 (CI 39635203439): GLINK/QRTR block of topaz 0118 ported into SweetWpss.cpp (desc 478, our TX 479 =
+0x4000 exactly as left by the bootloader, WPSS TX 480; channel IPCRTR; doorbell IPCC client 24 signal 0 from DT
+glink_wpss mboxes <ipcc 24 0>; DT qcom,intents <0x800 5 0x2000 3 0x4400 2>, we advertise 8 x 0x4400). Started
+after READY inside wpss_watch, polled every ms; summary lists the QRTR services (WLFW = 0x45).
