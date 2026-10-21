@@ -1184,3 +1184,10 @@ is_supported), 0 for 3,4 (unused) -> the SCM interface is right; is_supported(6)
 Stopped at "split hash segment": wpss.mdt = headers (340) + hash (6848) concatenated, hash p_offset 0x1000
 (the .b01 is the same bytes). topaz's loader only takes the hash at p_offset. xnu 0110 (CI 39621790603): take
 it right after the headers when hdr + filesz == mdt size (Linux qcom_mdt_read_metadata).
+**0110 RESULT (2026-10-21 ~17:12): TZ ACCEPTED THE FIRMWARE** - init_image ret=0 res=0 (meta 7188 @0xb0000000,
+6 resumes), mem_setup ok, segments loaded, auth_and_reset ret=0 (is_supported still says 0: ignore it). But
+in 60 s the WPSS never created SMP2P item 616 (no READY, no FATAL). DT qcom,wpss@8a00000 (Android pil-tz):
+proxy vdd_cx/vdd_mx at level 0x180 = 384 (TURBO), proxy clock xo, qcom,signal-aop (AOP QMP load_state).
+xnu 0111 (CI 39623973363): AOP QMP (qcom,qmp-aop@c300000, ipcc client 0 signal 0, Linux qcom_aoss.c
+link/channel handshake, 64-byte message) "{class: image, res: load_state, name: wpss, val: on}" right
+before auth_and_reset. Next if still silent: ARC votes cx.lvl/mx.lvl (sweet_rpmh.c only does VRM now).
