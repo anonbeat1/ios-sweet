@@ -1119,3 +1119,40 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
      cpu_init, before arm_vm_init.
   5. panic hook at top of panic_trap_to_debugger: va_copy + _doprnt(fmt, &copy, sweet_early_putc, 16).
   Verify with tools/xnu-cc.py (compile+symbols) and patch-order simulation before the single CI run.
+
+## Wi-Fi port plan (from ios-topaz study, 2026-10-21)
+
+ios-topaz (MakrSas, fork of ios-sweet, NO license) brings up Qualcomm Wi-Fi entirely in XNU
+in one file `iokit/Kernel/arm/TopazModem.cpp` (~6000 lines, patches 0113-0130). Downloaded for
+study in scratchpad/topaz/ (NOT committed; their code is unlicensed, reuse = re-implement, not
+copy-paste; different chip anyway). Layering (Qualcomm platform, chip-independent lower half;
+ath10k-specific upper half):
+  0113 PAS boot   - SCM(SCM_SVC_PIL, PAS_ID) loads an MDT/ELF-split firmware into a relocatable
+                    region; SMEM partition-table + SMP2P parsing. mb()=dsb sy.
+  0115 fw source  - topaz reads fw from the modem_a partition (khaje bundles Wi-Fi fw in modem).
+  0118 GLINK/QRTR - GLINK over SMEM FIFOs (desc 478 / tx 479 / rx 480), QRTR router on top.
+  0121 host svcs  - QRTR control / name service.
+  0122 wlfw       - WLAN firmware QMI service handshake (MSA region, caldata, mode).
+  0123 scan, 0125 HTT, 0126 API, 0129 station, 0130 join-pmk (WPA2 PMK) - ath10k WMI/HTT.
+topaz constants (ath10k, Wi-Fi fw in MODEM, apcs mailbox): PAS_ID_MODEM 4, SMEM_PA 0x46000000,
+TCSR_MUTEX_PA 0x340000, APCS_PA 0x0F111000 (APCS_IPC 8), WLFW_MSA_BASE 0x51900000,
+WLFW_CLIENT_ID 0x4b4e454c (ATH10K), ABI_NS "QCA_ML", SMMU_PA 0x0C600000, CE_PA 0x0C800000+0x240000.
+
+Spacewar deltas (SM7325, from live.dtb /tmp/live.dts):
+  - Chip: **WCN6750 = ath11k** (`qcom,wcn6750`, icnss2), NOT ath10k. The LOWER half (PAS, SMEM,
+    SMP2P, GLINK, QRTR, wlfw QMI handshake; ~0113-0122) ports with address changes only. The
+    UPPER half (HTT/WMI/CE/QMI-caldata; 0125/0126/0129/0130) is ath11k = real rework: different
+    WMI, HTT, CE config, board-2.bin/bdwlan caldata, ath11k WCN6750 hw_params.
+  - Runs on **WPSS**, a separate PIL image (not the modem). PAS id = WPSS (confirm; typically 13),
+    fw is a separate wpss split image (locate: wpss partition or /vendor/firmware_mnt/image).
+  - Addresses: SMEM `smem@80900000`; TCSR mutex `syscon@1f40000`; WPSS load region
+    `wlan@9ae00000` (the carve-out we already avoid); fw_mem `wlan_fw@80c00000`; MSA fixed
+    region id 0x35.
+  - **Mailbox differs:** SM7325 uses **IPCC** (`qcom,ipcc@408000`), not khaje's apcs_glb. The
+    SMP2P "kick" must use the IPCC protocol (client/signal ids) instead of APCS_IPC. This is the
+    main lower-half divergence to reverse.
+Staged milestones (each visible in the USB log): (1) PAS-boot WPSS -> remoteproc runs; (2) SMP2P
+via IPCC + QRTR hello from the remote; (3) wlfw QMI handshake + MSA/caldata; (4) ath11k WMI up +
+scan results; (5) associate WPA2-PSK + DHCP (reuse the ue0/configd plumbing we already have for
+the IP side). Risk: biggest unknown is step 3-4 ath11k caldata (board data for WCN6750) and the
+IPCC kick. Start with (1): a TopazModem-style PAS loader with Spacewar addresses + the WPSS image.
