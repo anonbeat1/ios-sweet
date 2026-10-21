@@ -1157,3 +1157,18 @@ via IPCC + QRTR hello from the remote; (3) wlfw QMI handshake + MSA/caldata; (4)
 scan results; (5) associate WPA2-PSK + DHCP (reuse the ue0/configd plumbing we already have for
 the IP side). Risk: biggest unknown is step 3-4 ath11k caldata (board data for WCN6750) and the
 IPCC kick. Start with (1): a TopazModem-style PAS loader with Spacewar addresses + the WPSS image.
+Wi-Fi step 1 (2026-10-21): firmware found in this phone's modem_a backup (FAT16, 4 KiB sectors; macOS
+won't mount it, `7zz x` reads it): image/wpss.mdt + wpss.b00..b07 (ELF32 Hexagon, entry 0x9ae00000;
+9 phdrs: 0 = ELF hdr, 1 = hash (inside the .mdt), 2-7 LOAD relocatable -> .b02-.b07, 8 = bss; load
+region 0x9ae00000..0x9c700000 = exactly pil_wpss_mem), image/qca6750/bdwlan.* + bdwlan.elf + regdb.bin
+(WCN6750 board data: the step-3 unknown is solved), image/kodiak/wpss.qdb. Extracted to research/wpss-fw/
+(gitignored). DT (/tmp/live.dts): qcom,wpss@8a00000 pil-tz-generic pas-id 6, smem-id 626 (crash
+reason), memory-region pil_wpss_mem; qcom,smp2p-wpss qcom,smem <617 616>, remote-pid 13, mboxes
+<ipcc 24 2>; smem 0x80900000+0x200000, hwlocks <tcsr_mutex 3>, tcsr mutex 0x1f40000 stride 0x1000;
+ipcc 0x408000 (SEND_ID 0x0c = client<<16|signal). Free RAM for the TZ-visible pool: no reserved
+regions in 0x9c700000..0xc0000000 (ramoops is at 0x83a00000), kernel DRAM starts at 0xE4000000 ->
+pool 0xB0000000+16 MB. topaz does no power votes; Linux sends AOP QMP "load_state wpss on" + cx/mx
+rpmhpd votes for WPSS: suspect #1 if auth_and_reset/READY fail.
+xnu 0108 (CI 39616339120): iokit/Kernel/arm/SweetWpss.cpp, boot-arg wpss=1 (wpss_watch=N seconds),
+started from AppleCLCD::start, logs "SWEET WPSS: ...". Needs the firmware on the phone root:
+/usr/share/firmware/spacewar/wpss/wpss.{mdt,b00..b07}. NOT booted yet.
