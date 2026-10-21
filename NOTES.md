@@ -1259,3 +1259,12 @@ regdb.bin" and NO response. Bug: qrtr_send had a 512-byte cap (from topaz 0118; 
 ~6 KB BDF segment was silently dropped. board data files copied to the phone (regdb.bin 24278, bdwlan.elf
 60000, sha256 verified). xnu 0120 (CI 39643639605): qrtr_send uses a heap buffer sized to the payload.
 Open Q: whether WCN6750 wants the REGDB download at all (supports_regdb) - if it errors, send only bdwlan.elf.
+**MILESTONE (2026-10-21 ~19:40, 0120, shim/out/spacewar-xnu-0120-wpss.img): WI-FI STEP 3 DONE, WLAN FIRMWARE
+INITIALIZED.** cap chip_id 1 board_id ff; device_info bar_addr 0x61e00000; regdb.bin 4 segments all RESP ok;
+bdwlan.elf 10 segments all ok; then WLFW INDICATION 0038 = QMI_WLANFW_FW_INIT_DONE_IND (payload tlv 0x10 u32
+0xb6af00, 0x11 u16 0x0001). WCN6750 does want regdb (type 4) + bdwlan.elf (type 1); both accepted. glink
+steady: 113 rx / 78 tx, 18 RESUME_TX, no drops. The WLAN firmware is up and calibrated.
+NEXT = Wi-Fi step 4/5 (the big one): the ath11k data path to actually scan/associate - WMI over GLINK
+(ath11k uses a separate 'ath11k' WMI channel, not QRTR) or the hybrid-bus HAL (CE copy engines, DP rings,
+HTT) against bar_addr 0x61e00000. This is thousands of lines (ath11k dp/hal/wmi) and the hardest part;
+not started. topaz 0123-0130 is ath10k WMI/HTT (wrong for ath11k). Step 1-3 (firmware up) is the reusable base.
