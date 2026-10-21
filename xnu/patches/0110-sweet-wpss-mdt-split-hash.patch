@@ -1,0 +1,35 @@
+diff --git a/iokit/Kernel/arm/SweetWpss.cpp b/iokit/Kernel/arm/SweetWpss.cpp
+index 1ba554fce5b2..259f4fadcbe1 100644
+--- a/iokit/Kernel/arm/SweetWpss.cpp
++++ b/iokit/Kernel/arm/SweetWpss.cpp
+@@ -519,13 +519,27 @@ wpss_boot(void)
+ 		/* metadata = ELF header + phdrs + hash segment, contiguous, in the pool */
+ 		uint64_t hdr = eh->e_phoff + eh->e_phnum * sizeof(struct elf32_phdr);
+ 		uint64_t meta_size = hdr + ph[hash].p_filesz;
++		/*
++		 * qcom_mdt_read_metadata(): the hash is at its p_offset when the .mdt is a whole
++		 * ELF, or right after the headers when the .mdt is "headers + hash" (wpss.mdt:
++		 * 340 + 6848 = 7188 bytes, p_offset 0x1000).
++		 */
++		uint64_t hash_off;
++		if (ph[hash].p_offset + ph[hash].p_filesz <= (uint64_t)mdt_size) {
++			hash_off = ph[hash].p_offset;
++		} else if (hdr + ph[hash].p_filesz == (uint64_t)mdt_size) {
++			hash_off = hdr;
++		} else {
++			LOG("metadata: hash segment not in %s.mdt", FW_NAME);
++			goto out;
++		}
+ 		meta = (uint8_t *)pool_alloc(meta_size, &meta_pa);
+-		if (meta == NULL || ph[hash].p_offset + ph[hash].p_filesz > (uint64_t)mdt_size) {
+-			LOG("metadata: alloc or split hash segment not supported");
++		if (meta == NULL) {
++			LOG("metadata: pool alloc failed");
+ 			goto out;
+ 		}
+ 		memcpy(meta, mdt, hdr);
+-		memcpy(meta + hdr, mdt + ph[hash].p_offset, ph[hash].p_filesz);
++		memcpy(meta + hdr, mdt + hash_off, ph[hash].p_filesz);
+ 		mb();
+ 
+ 		st = scm(SCM_FN(SCM_SVC_PIL, PIL_INIT_IMAGE), 2 | (SCM_ARG_RW << 6), PAS_ID_WPSS, meta_pa, 0, &res);
