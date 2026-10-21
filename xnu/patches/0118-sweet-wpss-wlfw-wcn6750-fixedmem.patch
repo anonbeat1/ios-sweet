@@ -1,0 +1,36 @@
+diff --git a/iokit/Kernel/arm/SweetWpss.cpp b/iokit/Kernel/arm/SweetWpss.cpp
+index b4911b9eb9d1..369fe519a3e1 100644
+--- a/iokit/Kernel/arm/SweetWpss.cpp
++++ b/iokit/Kernel/arm/SweetWpss.cpp
+@@ -1188,10 +1188,7 @@ w_send_host_cap(void)
+ 	if (!wm_new(&m, WLFW_HOST_CAP)) {
+ 		return;
+ 	}
+-	wm_u32(&m, 0x10, 1);            /* num_clients = 1 */
+-	wm_u8(&m, 0x16, 1);            /* bdf_support_valid/enable */
+-	wm_u8(&m, 0x1b, 1);            /* m3_support */
+-	wm_u8(&m, 0x1c, 1);            /* m3_cache_support */
++	wm_u32(&m, 0x10, 1);            /* num_clients = 1 (ath11k always sends this) */
+ 	wm_send(&m);
+ 	w_step = "host_cap sent";
+ }
+@@ -1205,16 +1202,12 @@ wlfw_arrive(uint32_t node, uint32_t port)
+ 	}
+ 	w_node = node;
+ 	w_port = port;
++	/* WCN6750 fixed_fw_mem = true: no request_mem / fw_mem_ready enables. */
+ 	if (wm_new(&m, WLFW_IND_REGISTER)) {
+ 		wm_u8(&m, 0x10, 1);        /* fw_ready_enable */
+-		wm_u8(&m, 0x11, 1);        /* initiate_cal_download_enable */
+-		wm_u8(&m, 0x12, 1);        /* initiate_cal_update_enable */
+-		wm_u8(&m, 0x13, 1);        /* msa_ready_enable */
+-		wm_u8(&m, 0x14, 1);        /* pin_connect_result_enable */
+ 		wm_u32(&m, 0x15, WLFW_CLIENT_ID);
+-		wm_u8(&m, 0x16, 1);        /* request_mem_enable (ath11k) */
+-		wm_u8(&m, 0x17, 1);        /* fw_mem_ready_enable (ath11k) */
+-		wm_u8(&m, 0x18, 1);        /* fw_init_done_enable (ath11k) */
++		wm_u8(&m, 0x18, 1);        /* fw_init_done_enable */
++		wm_u8(&m, 0x1b, 1);        /* cal_done_enable */
+ 		wm_send(&m);
+ 		w_step = "ind_register sent";
+ 		LOG("t=%u ms: wlfw: ind_register sent to node %u port %x", g_ms, node, port);
