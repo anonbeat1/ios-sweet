@@ -1206,4 +1206,6 @@ doorbell every second while 616 is missing, dump 617/480/605/611 and global 616.
 0113 RESULT (observed): no 616 anywhere (private or global) after 60 s of periodic doorbells. Our 617 header:
 "$SMP" v1, local 0, remote 13, total 16, valid 0. 480 (16 KiB) starts 00 00 01 00 07 00. 605 (32 bytes) and
 611 (4 KiB, zero so far) unidentified. Global partition: 14 items 469 473 602 404 403 137 604 474 402 603 614
-612 628 626. Wi-Fi step 1 paused here pending the user's direction.
+612 628 626. User: continue Wi-Fi. xnu 0114 (CI 39630544639): the outbound item 617 is created with entries
+master-kernel=0 and wlan=0 (DT qcom,smp2p-wpss) BEFORE auth_and_reset, as Linux's smp2p probe does (we
+used to create it empty after the start). Image shim/out/spacewar-xnu-0114-wpss.img.
