@@ -1197,3 +1197,9 @@ xnu 0112 (CI 39626083448): sweet_rpmh.c generalized (rh_lookup(slave), rh_send(n
 same 3 cmds) + sweet_rpmh_arc_vote("cx.lvl"/"mx.lvl", level) = first hlvl in the cmd-db aux table with
 level >= wanted (rpmhpd); WPSS votes both at 384 after the QMP message, before auth_and_reset; logs the
 level tables. Diagnostics: SMEM item list of the apps<->wpss partition before and after, global item 626.
+0112 RESULT: ARC votes acked (cx.lvl addr 0x30000 table 0 16 64 128 192 256 384 416 -> hlvl 6; mx.lvl 0x30010
+table 0 16 64 128 192 224 256 320 384 416 432 -> hlvl 8). WPSS IS RUNNING: apps<->wpss items before = 478 479,
+after = 478 479 617(ours) 480 605 611 (480 = GLINK rx FIFO, created by the WPSS). Global 626 = "SFR Init: wdog
+or kernel error suspected." (believed to be the initial SFR text a subsystem writes at start). Still no 616.
+xnu 0113 (CI 39628568369): diagnostics only - look for 616 in the global partition too, re-ring the IPCC
+doorbell every second while 616 is missing, dump 617/480/605/611 and global 616.
