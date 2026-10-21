@@ -1303,3 +1303,22 @@ Decision (2026-10-21): stop Wi-Fi at step 3 (firmware up) for now. wlan_mode(mis
 the host CE rings/DP would make the FW DMA to rings that do not exist (hang/fault risk), so it
 is NOT worth sending blind. Step 4/5 (HAL/DP/WMI/HTT) is a separate large effort; the firmware-up
 base (0108-0120) and this roadmap are the reusable foundation.
+
+## CoreImage fail-clean (2026-10-21, gpt-6-astra agent + main)
+
+Apps that use CoreImage crash with no GPU (CI::GLContext SIGSEGV); e.g. Messages via MobileIcons
+icon scaling, Photos. Fix (approach B): a tweak that makes -[CIContext initWith*] return nil when
+there is no GPU, so the GL path is never entered. Cost: blank icons/thumbnails; covers every
+CoreImage client. Agent plan: research/coreimage-plan.md (gitignored; cache addresses + symbol table).
+- Kernel: xnu 0121 (CI 39647925065) - sweet_amfi.c dyld policy now returns bit 1 (ALLOW DYLD_* env
+  vars) as well as bit 8. Verified against dyld AMFI flags: bit 0x2 = ALLOW_PATH_VARS gates
+  DYLD_INSERT_LIBRARIES. Side effect: every process honours DYLD_* from its env (nothing sets them
+  today; device is throwaway-boot). No CS_REQUIRE_LV in the patches, so an ad-hoc dylib loads.
+- Tweak: tweaks/cicpu/ (cicpu.m MRC ObjC swizzle of the 5 CIContext inits via method_setImplementation,
+  constructor + _dyld_register_func_for_add_image fallback; Makefile uses `xcrun --sdk iphoneos clang`,
+  built cicpu.dylib arch arm64 minos 16.0, ad-hoc signed). Env: CICPU_GPU=1 keeps originals, CICPU_LOG=0
+  quiet. build/ gitignored.
+- To apply: boot the 0121 kernel; copy build/cicpu.dylib -> /var/jb/usr/lib/cicpu.dylib (755); inject via
+  DYLD_INSERT_LIBRARIES for MobileSMS/Photos. Injection path unverified on iOS: try launchd setenv, else
+  a kernel sweetinsert= boot-arg (like sweet_exec_dtmode in kern_exec.c, not written yet). Verify: console
+  "cicpu: CIContext hooks installed (gpu=0)", "initWithOptions: -> nil", no CI::GLContext crash.
