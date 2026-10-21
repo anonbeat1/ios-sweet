@@ -1,0 +1,29 @@
+diff --git a/iokit/Kernel/arm/SweetWpss.cpp b/iokit/Kernel/arm/SweetWpss.cpp
+index 5d4f2f56eecb..0341893b8386 100644
+--- a/iokit/Kernel/arm/SweetWpss.cpp
++++ b/iokit/Kernel/arm/SweetWpss.cpp
+@@ -786,12 +786,14 @@ static bool w_regdb_done;
+ static void
+ qrtr_send(uint32_t type, uint32_t src_port, uint32_t dst_node, uint32_t dst_port, const void *payload, uint32_t len)
+ {
+-	uint8_t buf[sizeof(struct qrtr_hdr_v1) + 512] = {};
++	uint32_t cap = sizeof(struct qrtr_hdr_v1) + len + 8;
++	uint8_t *buf = (uint8_t *)IOMalloc(cap);
+ 	uint32_t n;
+ 
+-	if (len > 512) {
++	if (buf == NULL) {
+ 		return;
+ 	}
++	bzero(buf, cap);
+ 	if (q_ver == 2) {
+ 		struct qrtr_hdr_v2 *h = (struct qrtr_hdr_v2 *)buf;
+ 		h->version = 2;
+@@ -817,6 +819,7 @@ qrtr_send(uint32_t type, uint32_t src_port, uint32_t dst_node, uint32_t dst_port
+ 	}
+ 	memcpy(buf + n, payload, len);
+ 	glink_send(buf, (n + len + 3) & ~3u);
++	IOFree(buf, cap);
+ }
+ 
+ static const char *
