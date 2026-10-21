@@ -1215,3 +1215,12 @@ outbound item. qcom,smem = <617 616> is <inbound outbound> (Linux smp2p.c SMP2P_
 modem <435 428> = in 435, out 428). 0108-0114 had the direction swapped. xnu 0115 (CI 39632918927): out 616,
 in 617. Other agent hypotheses kept for later: icnss 'wlan' smp2p power-on bit, WCN6750 rails (S1 1.8 V,
 S8 1.28 V, uV units), GLINK 478/479 APSS side, IPCC RECV clear, 605 = live WPSS timestamps.
+**MILESTONE (2026-10-21 ~18:30, 0115, shim/out/spacewar-xnu-0115-wpss.img): WI-FI STEP 1 DONE - THE WPSS
+BOOTS AND REPORTS READY.** Log: "SMP2P out 616 before start: ok, master-kernel 1, wlan 1, valid 2",
+auth_and_reset ret 0, "t=33 ms: WPSS SMP2P item 617 up (v1, 2 entries)", "slave-kernel 00000006 READY
+HANDOVER". Our 616 header stays local 0 / remote 13 / valid 2. Root cause of 0108-0114: swapped SMP2P
+direction (found by the gpt-6-astra brainstorm agent). Sequence that works: SMEM map -> init_image (split
+.mdt hash) -> mem_setup -> copy segments -> AOP QMP load_state wpss on -> ARC cx/mx 384 -> SMP2P out 616
+(master-kernel, wlan) -> auth_and_reset -> READY. (Whether QMP/ARC are strictly needed is untested.)
+Next = Wi-Fi step 2: GLINK over SMEM (items 478 desc / 479 tx / 480 rx with the WPSS) + QRTR, from topaz
+0118/0121; then wlfw QMI (0122) with the WCN6750 board data (research/wpss-fw/image/qca6750/).
