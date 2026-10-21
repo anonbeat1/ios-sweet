@@ -1241,3 +1241,9 @@ qm_find, w_result), client port 0x4004, qrtr DATA to PORT_WLFWC -> wlfw_rx. On W
 support). Every WLFW indication/response is hex-dumped (w_hex) so the phone reveals the real ath11k order
 (ath11k = REQUEST_MEM ind -> RESPOND_MEM -> MEM_READY -> CAP -> BDF -> M3 -> cal -> FW_INIT_DONE). Diagnostic
 first: 0117 only sends ind_register + host_cap, then observes.
+0117 RESULT: ind_register RESP 0020 ok (fw_status in TLV 0x10); host_cap RESP 0034 FAIL result 1 err 1
+(malformed). Web (ath11k WCN6750 QMI patch, lists.infradead.org/pipermail/ath11k/2022-April/003097.html):
+WCN6750 is fixed_fw_mem = true, so NO request_mem/fw_mem_ready; sequence ind_register -> host_cap ->
+target_cap(cap) -> device_info -> BDF -> FW ready. host_cap TLV ids were wrong in 0117 (0x16=m3_support,
+0x1b=mem_bucket u32, not bdf/m3). xnu 0118 (CI 39639214326): ind_register = fw_ready(0x10) + client_id(0x15)
++ fw_init_done(0x18) + cal_done(0x1b), no mem enables; host_cap = num_clients(0x10)=1 only, then observe.
