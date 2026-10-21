@@ -1122,7 +1122,8 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
 
 ## Wi-Fi port plan (from ios-topaz study, 2026-10-21)
 
-ios-topaz (MakrSas, fork of ios-sweet, NO license) brings up Qualcomm Wi-Fi entirely in XNU
+ios-topaz (MakrSas, fork of ios-sweet; author gave explicit OK 2026-10-21 to copy/collaborate,
+so we adapt TopazModem.cpp directly) brings up Qualcomm Wi-Fi entirely in XNU
 in one file `iokit/Kernel/arm/TopazModem.cpp` (~6000 lines, patches 0113-0130). Downloaded for
 study in scratchpad/topaz/ (NOT committed; their code is unlicensed, reuse = re-implement, not
 copy-paste; different chip anyway). Layering (Qualcomm platform, chip-independent lower half;
