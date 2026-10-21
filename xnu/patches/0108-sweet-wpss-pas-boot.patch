@@ -1,0 +1,677 @@
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 5b1a84890bd1..f03ccbe2187f 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -95,6 +95,8 @@ class IOMobileFramebuffer : public IOService {
+ 
+ OSDefineMetaClassAndStructors(IOMobileFramebuffer, IOService);
+ 
++extern "C" void sweet_wpss_init(void);            /* SweetWpss.cpp (boot-arg wpss=1) */
++
+ class IOMobileFramebufferUserClient;
+ 
+ class AppleCLCD : public IOMobileFramebuffer {
+@@ -168,6 +170,7 @@ AppleCLCD::start(IOService *provider)
+ 	if (!IOService::start(provider)) {
+ 		return false;
+ 	}
++	sweet_wpss_init();
+ 	PE_current_console(&video);
+ 	fPhys = video.v_baseAddr;
+ 	fWidth = (uint32_t)video.v_width;
+diff --git a/iokit/Kernel/arm/SweetWpss.cpp b/iokit/Kernel/arm/SweetWpss.cpp
+new file mode 100644
+index 000000000000..b46568d60a97
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetWpss.cpp
+@@ -0,0 +1,638 @@
++/*
++ * Spacewar (SM7325 "kodiak"): boot the Wireless Processor SubSystem (WPSS), the Hexagon
++ * DSP that runs the WCN6750 (ath11k) Wi-Fi firmware. Wi-Fi step 1.
++ *
++ * Adapted from ios-topaz patch 0113 (TopazModem.cpp, MakrSas; used with the author's OK),
++ * itself a port of topaz-woa ModemPas.c/Smem.c, the way Linux qcom_mdt_load() +
++ * qcom_q6v5_pas boot a remote processor:
++ *   TrustZone PAS init_image (.mdt metadata) -> mem_setup -> copy the .bNN segments into
++ *   the carveout (0x9ae00000, 0x1900000) -> auth_and_reset -> wait for the WPSS's SMP2P
++ *   "slave-kernel" READY bit (SMEM item 616).
++ * Differences from topaz (all from the live device tree): PAS id 6 (qcom,wpss@8a00000),
++ * SMEM 0x80900000, TCSR mutex 0x1f40000, SMP2P items 617 (apps -> wpss) / 616 (wpss -> apps)
++ * with remote pid 13, and the SMP2P doorbell goes through the IPCC (qcom,ipcc@408000,
++ * client 24 = WPSS, signal 2 = SMP2P) instead of the apcs_glb mailbox.
++ *
++ * Boot-arg wpss=1. Firmware from the root filesystem, /usr/share/firmware/spacewar/wpss/
++ * (wpss.mdt + wpss.b00..b07 from this phone's modem_a NON-HLOS partition, image/).
++ * Rules (topaz WIFI_RISKS.md): buffers TZ/the DSP see are in RAM the kernel does not manage
++ * (pool at 0xB0000000, below the kernel's 0xE4000000), memory shared with the DSP is
++ * write-combined, the carveout is mapped only while copying, the DSP must start cold,
++ * polling only (no interrupts). Not done yet (Linux does it): AOP QMP "load_state wpss on"
++ * and the cx/mx power-domain votes; if auth_and_reset or READY fail, that is the suspect.
++ */
++#include <pexpert/arm64/board_config.h>
++
++#if defined(SWEET)
++#include <IOKit/IOLib.h>
++#include <IOKit/IOMemoryDescriptor.h>
++#include <kern/thread.h>
++#include <pexpert/pexpert.h>
++#include <sys/vnode.h>
++#include <sys/fcntl.h>
++#include <sys/proc.h>
++
++extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++#define LOG(fmt, ...)       IOLog("SWEET WPSS: " fmt "\n", ##__VA_ARGS__)
++
++#define FW_DIR              "/usr/share/firmware/spacewar/wpss/"
++#define FW_NAME             "wpss"
++
++#define PAS_ID_WPSS         6
++#define SCM_FN(svc, cmd)    (0x42000000u | ((uint32_t)(svc) << 8) | (uint32_t)(cmd))
++#define SCM_SVC_PIL         0x02
++#define PIL_INIT_IMAGE      0x01
++#define PIL_MEM_SETUP       0x02
++#define PIL_AUTH_RESET      0x05
++#define PIL_SHUTDOWN        0x06
++#define PIL_IS_SUPPORTED    0x07
++#define SCM_ARG_RW          2
++
++#define PT_LOAD             1
++#define MDT_TYPE_MASK       (7u << 24)
++#define MDT_TYPE_HASH       (2u << 24)
++#define MDT_RELOCATABLE     (1u << 27)
++
++#define WPSS_CARVEOUT       0x9ae00000u         /* reserved-memory pil_wpss_mem */
++#define WPSS_CARVEOUT_SIZE  0x01900000u
++
++/* free low-bank RAM (no reserved-memory between 0x9c700000 and 0xc0000000), below the
++ * kernel's DRAM base 0xE4000000: the kernel never maps or allocates it */
++#define WPSS_POOL_BASE      0xB0000000ull
++#define WPSS_POOL_SIZE      0x01000000ull       /* 16 MB: metadata now, rings/WMI later */
++
++#define SMEM_PA             0x80900000ull
++#define SMEM_SIZE           0x00200000u
++#define SMEM_GLOBAL_HOST    0xFFFE
++#define TCSR_MUTEX_PA       0x01f40000ull       /* qcom,tcsr-mutex, stride 0x1000 */
++#define SMEM_HWLOCK         3
++#define HWLOCK_APPS_ID      1
++
++#define IPCC_PA             0x00408000ull       /* qcom,ipcc, APSS view */
++#define IPCC_REG_SEND_ID    0x0c
++#define IPCC_CLIENT_WPSS    24
++#define IPCC_SIGNAL_SMP2P   2
++
++#define WPSS_REMOTE_PID     13
++#define ITEM_SMP2P_OUT      617                 /* apps -> wpss */
++#define ITEM_SMP2P_IN       616                 /* wpss -> apps */
++#define ITEM_WPSS_CRASH     626                 /* qcom,smem-id of qcom,wpss@8a00000 */
++#define SMP2P_MAGIC         0x504D5324u         /* "$SMP" */
++#define SMP2P_MAX_ENTRY     16
++
++struct elf32_ehdr {
++	uint8_t  e_ident[16];
++	uint16_t e_type, e_machine;
++	uint32_t e_version, e_entry, e_phoff, e_shoff, e_flags;
++	uint16_t e_ehsize, e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx;
++} __attribute__((packed));
++struct elf32_phdr {
++	uint32_t p_type, p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_flags, p_align;
++} __attribute__((packed));
++
++struct smem_pt_entry { uint32_t offset, size, flags; uint16_t host0, host1; uint32_t cacheline, rsvd[7]; } __attribute__((packed));
++struct smem_pt { uint8_t magic[4]; uint32_t version, num_entries, rsvd[5]; } __attribute__((packed));
++struct smem_part_hdr { uint8_t magic[4]; uint16_t host0, host1; uint32_t size, free_uncached, free_cached, rsvd[3]; } __attribute__((packed));
++struct smem_priv_entry { uint16_t canary, item; uint32_t size; uint16_t pad_data, pad_hdr; uint32_t rsvd; } __attribute__((packed));
++struct smp2p_hdr { uint32_t magic; uint8_t version, features[3]; uint16_t local_pid, remote_pid, total, valid; uint32_t flags; } __attribute__((packed));
++struct smp2p_entry { char name[16]; uint32_t value; } __attribute__((packed));
++
++static uint8_t *smem;                           /* write-combined */
++static volatile uint8_t *ipcc, *tcsr_mutex;     /* device */
++static uint8_t *pool;
++static uint64_t pool_used;
++
++static inline void mb(void) { __asm__ volatile ("dsb sy" ::: "memory"); }
++
++/* ---------------------------------------------------------------- mappings */
++
++/* Large or RAM regions: an IOMemoryDescriptor mapping (ml_io_map space is small). */
++static IOMemoryMap *
++map_phys(uint64_t pa, uint64_t size, bool wc)
++{
++	IOMemoryDescriptor *md = IOMemoryDescriptor::withPhysicalAddress(pa, size, kIODirectionInOut);
++	IOMemoryMap *m;
++
++	if (md == NULL) {
++		return NULL;
++	}
++	m = md->map(wc ? kIOMapWriteCombineCache : kIOMapInhibitCache);
++	md->release();
++	return m;
++}
++
++static void *
++pool_alloc(uint64_t size, uint64_t *pa)
++{
++	size = (size + 0xfff) & ~0xfffull;
++	if (pool == NULL || pool_used + size > WPSS_POOL_SIZE) {
++		return NULL;
++	}
++	*pa = WPSS_POOL_BASE + pool_used;
++	void *va = pool + pool_used;
++	pool_used += size;
++	bzero(va, size);                            /* Normal NC: DC ZVA is fine */
++	return va;
++}
++
++/* ---------------------------------------------------------------- TrustZone */
++
++static uint64_t
++smc(uint64_t a[8])
++{
++	register uint64_t x0 __asm__("x0") = a[0], x1 __asm__("x1") = a[1], x2 __asm__("x2") = a[2],
++	    x3 __asm__("x3") = a[3], x4 __asm__("x4") = a[4], x5 __asm__("x5") = a[5], x6 __asm__("x6") = a[6],
++	    x7 __asm__("x7") = a[7];
++	__asm__ volatile ("smc #0"
++            : "+r"(x0), "+r"(x1), "+r"(x2), "+r"(x3), "+r"(x4), "+r"(x5), "+r"(x6), "+r"(x7)
++            :
++            : "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17", "memory");
++	a[0] = x0; a[1] = x1; a[2] = x2; a[3] = x3; a[4] = x4; a[5] = x5; a[6] = x6; a[7] = x7;
++	return x0;
++}
++
++static unsigned scm_resumes;
++
++static uint64_t
++scm(uint32_t fn, uint64_t arginfo, uint64_t a, uint64_t b, uint64_t c, uint64_t *res1)
++{
++	uint64_t args[8] = { fn, arginfo, a, b, c, 0, 0, 0 };
++	unsigned n;
++
++	smc(args);
++	/* long calls return INTERRUPTED (1): resume with x0 = 1 and the session from x6 */
++	for (n = 0; args[0] == 1 && n < 100000; n++) {
++		uint64_t again[8] = { 1, arginfo, a, b, c, 0, args[6], 0 };
++		memcpy(args, again, sizeof(args));
++		smc(args);
++	}
++	scm_resumes = n;
++	if (res1 != NULL) {
++		*res1 = args[1];
++	}
++	return args[0];
++}
++
++/* ---------------------------------------------------------------- firmware files */
++
++/* Read FW_DIR name at offset 0 into dst (at most max bytes). Returns bytes read or -1. */
++static int64_t
++fw_read(const char *name, void *dst, uint64_t max)
++{
++	char path[96];
++	vnode_t vp = NULLVP;
++	vfs_context_t ctx = vfs_context_kernel();
++	uint64_t done = 0;
++	int err;
++
++	snprintf(path, sizeof(path), FW_DIR "%s", name);
++	err = vnode_open(path, FREAD, 0, 0, &vp, ctx);
++	if (err != 0) {
++		LOG("%s: open error %d", path, err);
++		return -1;
++	}
++	/* through a cacheable bounce buffer: the destination is device-ish WC memory */
++	const uint32_t chunk = 256 * 1024;
++	uint8_t *bounce = (uint8_t *)IOMalloc(chunk);
++	while (bounce != NULL && done < max) {
++		int resid = 0, len = (int)MIN((uint64_t)chunk, max - done);
++		err = vn_rdwr(UIO_READ, vp, (caddr_t)bounce, len, (off_t)done, UIO_SYSSPACE, 0,
++		    vfs_context_ucred(ctx), &resid, current_proc());
++		if (err != 0 || resid == len) {
++			break;
++		}
++		memcpy((uint8_t *)dst + done, bounce, len - resid);
++		done += len - resid;
++	}
++	if (bounce != NULL) {
++		IOFree(bounce, chunk);
++	}
++	vnode_close(vp, FREAD, ctx);
++	return err != 0 ? -1 : (int64_t)done;
++}
++
++static int64_t
++fw_size(const char *name)
++{
++	char path[96];
++	vnode_t vp = NULLVP;
++	vfs_context_t ctx = vfs_context_kernel();
++	off_t size = -1;
++
++	snprintf(path, sizeof(path), FW_DIR "%s", name);
++	if (vnode_lookup(path, 0, &vp, ctx) != 0) {
++		return -1;
++	}
++	struct vnode_attr va;
++	VATTR_INIT(&va);
++	VATTR_WANTED(&va, va_data_size);
++	if (vnode_getattr(vp, &va, ctx) == 0 && VATTR_IS_SUPPORTED(&va, va_data_size)) {
++		size = (off_t)va.va_data_size;
++	}
++	vnode_put(vp);
++	return size;
++}
++
++/* ---------------------------------------------------------------- SMEM */
++
++static struct smem_part_hdr *
++smem_partition(uint16_t a, uint16_t b)
++{
++	struct smem_pt *pt = (struct smem_pt *)(smem + SMEM_SIZE - 0x1000);
++	struct smem_pt_entry *e = (struct smem_pt_entry *)(pt + 1);
++
++	if (memcmp(pt->magic, "$TOC", 4) != 0 || pt->num_entries > 64) {
++		return NULL;
++	}
++	for (uint32_t i = 0; i < pt->num_entries; i++) {
++		if (e[i].offset != 0 && e[i].size != 0 && e[i].offset < SMEM_SIZE &&
++		    ((e[i].host0 == a && e[i].host1 == b) || (e[i].host0 == b && e[i].host1 == a))) {
++			return (struct smem_part_hdr *)(smem + e[i].offset);
++		}
++	}
++	return NULL;
++}
++
++static void *
++smem_get(struct smem_part_hdr *p, uint16_t item, uint32_t *size)
++{
++	uint8_t *e, *end;
++
++	if (p == NULL || memcmp(p->magic, "$PRT", 4) != 0 || p->free_uncached > p->size) {
++		return NULL;
++	}
++	e = (uint8_t *)p + sizeof(*p);
++	end = (uint8_t *)p + p->free_uncached;
++	while (e + sizeof(struct smem_priv_entry) <= end) {
++		struct smem_priv_entry *h = (struct smem_priv_entry *)e;
++		if (h->canary != 0xA5A5) {
++			return NULL;
++		}
++		if (h->item == item) {
++			if (size != NULL) {
++				*size = h->size - h->pad_data;
++			}
++			return e + sizeof(*h) + h->pad_hdr;
++		}
++		e += sizeof(*h) + h->pad_hdr + h->size;
++	}
++	return NULL;
++}
++
++static bool
++smem_lock(void)
++{
++	volatile uint32_t *reg = (volatile uint32_t *)(tcsr_mutex + SMEM_HWLOCK * 0x1000);
++
++	for (int n = 0; n < 100000; n++) {
++		*reg = HWLOCK_APPS_ID;
++		mb();
++		if (*reg == HWLOCK_APPS_ID) {
++			return true;
++		}
++		IODelay(10);
++	}
++	LOG("SMEM hwlock busy: owner %u", *reg);
++	return false;
++}
++
++static void
++smem_unlock(void)
++{
++	mb();
++	*(volatile uint32_t *)(tcsr_mutex + SMEM_HWLOCK * 0x1000) = 0;
++	mb();
++}
++
++/* qcom_smem_alloc_private(): append an uncached entry under hwlock 3 */
++static void *
++smem_alloc(struct smem_part_hdr *p, uint16_t item, uint32_t size)
++{
++	uint32_t aligned = (size + 7) & ~7u, need = sizeof(struct smem_priv_entry) + aligned;
++	void *v = smem_get(p, item, NULL);
++
++	if (v != NULL || p == NULL || !smem_lock()) {
++		return v;
++	}
++	v = smem_get(p, item, NULL);
++	if (v == NULL && p->free_uncached + need <= p->free_cached) {
++		struct smem_priv_entry *h = (struct smem_priv_entry *)((uint8_t *)p + p->free_uncached);
++		h->canary = 0xA5A5;
++		h->item = item;
++		h->size = aligned;
++		h->pad_data = (uint16_t)(aligned - size);
++		h->pad_hdr = 0;
++		h->rsvd = 0;
++		v = h + 1;
++		bzero(v, aligned);
++		mb();
++		p->free_uncached += need;
++		mb();
++	} else if (v == NULL) {
++		LOG("SMEM partition full: %x..%x need %x", p->free_uncached, p->free_cached, need);
++	}
++	smem_unlock();
++	return v;
++}
++
++/* ---------------------------------------------------------------- SMP2P */
++
++/* qcom-ipcc: SEND_ID = client id (31:16) | signal id (15:0) rings the remote's doorbell */
++static void
++smp2p_kick(void)
++{
++	mb();
++	*(volatile uint32_t *)(ipcc + IPCC_REG_SEND_ID) =
++	    ((uint32_t)IPCC_CLIENT_WPSS << 16) | IPCC_SIGNAL_SMP2P;
++	mb();
++}
++
++static struct smp2p_hdr *
++smp2p_create_out(struct smem_part_hdr *p)
++{
++	struct smp2p_hdr *o = (struct smp2p_hdr *)smem_alloc(p, ITEM_SMP2P_OUT,
++	    sizeof(struct smp2p_hdr) + SMP2P_MAX_ENTRY * sizeof(struct smp2p_entry));
++
++	if (o == NULL || o->version != 0) {
++		return o;
++	}
++	o->magic = SMP2P_MAGIC;
++	o->local_pid = 0;
++	o->remote_pid = WPSS_REMOTE_PID;
++	o->total = SMP2P_MAX_ENTRY;
++	o->valid = 0;
++	o->features[0] = 1;                         /* SSR_ACK */
++	mb();
++	o->version = 1;                             /* validates the item */
++	smp2p_kick();
++	return o;
++}
++
++static volatile uint32_t *
++smp2p_find(struct smp2p_hdr *h, const char *name)
++{
++	struct smp2p_entry *e = (struct smp2p_entry *)(h + 1);
++
++	for (uint32_t i = 0; i < h->valid && i < SMP2P_MAX_ENTRY; i++) {
++		if (strncmp(e[i].name, name, 16) == 0) {
++			return &e[i].value;
++		}
++	}
++	return NULL;
++}
++
++/*
++ * After auth_and_reset: watch the WPSS's "slave-kernel" entry (bit0 fatal, bit1 ready,
++ * bit2 handover) and log every change; on fatal print the crash reason (SMEM item 626).
++ */
++static void
++wpss_watch(struct smem_part_hdr *part, unsigned seconds)
++{
++	struct smp2p_hdr *in = NULL, *out = smp2p_create_out(part);
++	volatile uint32_t *sk = NULL;
++	uint32_t sk_last = ~0u;
++	bool ready = false;
++
++	if (out == NULL) {
++		LOG("cannot create SMP2P item %u", ITEM_SMP2P_OUT);
++		return;
++	}
++	for (unsigned ms = 0; ms < seconds * 1000; ms++) {
++		if (in == NULL) {
++			uint32_t sz = 0;
++			in = (struct smp2p_hdr *)smem_get(part, ITEM_SMP2P_IN, &sz);
++			if (in != NULL && in->magic != SMP2P_MAGIC) {
++				in = NULL;
++			}
++			if (in != NULL) {
++				LOG("t=%u ms: WPSS SMP2P item %u up (v%u, %u entries)", ms, ITEM_SMP2P_IN, in->version, in->valid);
++			}
++		}
++		if (in != NULL && sk == NULL) {
++			sk = smp2p_find(in, "slave-kernel");
++		}
++		if (sk != NULL && *sk != sk_last) {
++			sk_last = *sk;
++			LOG("t=%u ms: slave-kernel %08x%s%s%s", ms, sk_last, (sk_last & 1) ? " FATAL" : "",
++			    (sk_last & 2) ? " READY" : "", (sk_last & 4) ? " HANDOVER" : "");
++			if ((sk_last & 2) && !ready) {
++				ready = true;
++				LOG("WPSS is up (READY)");
++			}
++			if (sk_last & 1) {
++				uint32_t sz = 0;
++				const char *why = (const char *)smem_get(smem_partition(SMEM_GLOBAL_HOST, SMEM_GLOBAL_HOST), ITEM_WPSS_CRASH, &sz);
++				char buf[128] = {};
++				if (why != NULL) {
++					memcpy(buf, why, MIN(sz, (uint32_t)sizeof(buf) - 1));
++				}
++				LOG("WPSS crash reason: %s", why != NULL ? buf : "(none)");
++				return;
++			}
++		}
++		IOSleep(1);
++	}
++	LOG("watch done: slave-kernel %08x, %s", sk_last, ready ? "READY" : "NOT ready");
++}
++
++/* ---------------------------------------------------------------- PAS boot */
++
++static bool
++loadable(const struct elf32_phdr *p)
++{
++	return p->p_type == PT_LOAD && p->p_memsz != 0 && (p->p_flags & MDT_TYPE_MASK) != MDT_TYPE_HASH;
++}
++
++static bool
++wpss_boot(void)
++{
++	uint8_t *mdt = NULL, *meta;
++	int64_t mdt_size;
++	uint64_t meta_pa = 0, res = 0, st;
++	uint32_t min_a = ~0u, max_a = 0, hash = ~0u;
++	bool relocate = false, ok = false;
++
++	struct smem_part_hdr *part = smem_partition(0, WPSS_REMOTE_PID);
++	LOG("SMEM apps<->wpss partition %p", part);
++	if (part == NULL) {
++		return false;
++	}
++	if (smem_get(part, ITEM_SMP2P_IN, NULL) != NULL) {
++		LOG("WPSS SMP2P item %u already exists: WPSS is not cold, not touching it", ITEM_SMP2P_IN);
++		return false;
++	}
++	st = scm(SCM_FN(SCM_SVC_PIL, PIL_IS_SUPPORTED), 1, PAS_ID_WPSS, 0, 0, &res);
++	LOG("PAS id %u supported: ret=%llx res=%llx", PAS_ID_WPSS, st, res);
++	if (st != 0 || res != 1) {
++		return false;
++	}
++
++	mdt_size = fw_size(FW_NAME ".mdt");
++	if (mdt_size <= (int64_t)sizeof(struct elf32_ehdr) || mdt_size > 0x100000) {
++		LOG(FW_NAME ".mdt: size %lld", mdt_size);
++		return false;
++	}
++	mdt = (uint8_t *)IOMalloc(mdt_size);
++	if (mdt == NULL || fw_read(FW_NAME ".mdt", mdt, mdt_size) != mdt_size) {
++		goto out;
++	}
++	{
++		struct elf32_ehdr *eh = (struct elf32_ehdr *)mdt;
++		if (memcmp(eh->e_ident, "\x7f" "ELF", 4) != 0 ||
++		    eh->e_phoff + (uint64_t)eh->e_phnum * sizeof(struct elf32_phdr) > (uint64_t)mdt_size) {
++			LOG(FW_NAME ".mdt: bad ELF header");
++			goto out;
++		}
++		struct elf32_phdr *ph = (struct elf32_phdr *)(mdt + eh->e_phoff);
++		for (uint32_t i = 0; i < eh->e_phnum; i++) {
++			if ((ph[i].p_flags & MDT_TYPE_MASK) == MDT_TYPE_HASH) {
++				hash = i;
++			}
++			if (!loadable(&ph[i])) {
++				continue;
++			}
++			if (ph[i].p_flags & MDT_RELOCATABLE) {
++				relocate = true;
++			}
++			min_a = MIN(min_a, ph[i].p_paddr);
++			max_a = MAX(max_a, ph[i].p_paddr + ph[i].p_memsz);
++		}
++		LOG("phdrs=%u hash=%u region %08x..%08x relocate=%u", eh->e_phnum, hash, min_a, max_a, relocate);
++		if (hash == ~0u || min_a < WPSS_CARVEOUT || max_a > WPSS_CARVEOUT + WPSS_CARVEOUT_SIZE) {
++			LOG("unexpected layout (carveout is %08x+%x)", WPSS_CARVEOUT, WPSS_CARVEOUT_SIZE);
++			goto out;
++		}
++
++		/* metadata = ELF header + phdrs + hash segment, contiguous, in the pool */
++		uint64_t hdr = eh->e_phoff + eh->e_phnum * sizeof(struct elf32_phdr);
++		uint64_t meta_size = hdr + ph[hash].p_filesz;
++		meta = (uint8_t *)pool_alloc(meta_size, &meta_pa);
++		if (meta == NULL || ph[hash].p_offset + ph[hash].p_filesz > (uint64_t)mdt_size) {
++			LOG("metadata: alloc or split hash segment not supported");
++			goto out;
++		}
++		memcpy(meta, mdt, hdr);
++		memcpy(meta + hdr, mdt + ph[hash].p_offset, ph[hash].p_filesz);
++		mb();
++
++		st = scm(SCM_FN(SCM_SVC_PIL, PIL_INIT_IMAGE), 2 | (SCM_ARG_RW << 6), PAS_ID_WPSS, meta_pa, 0, &res);
++		LOG("init_image: ret=%llx res=%llx resumes=%u (meta %llu bytes @%llx)", st, res, scm_resumes, meta_size, meta_pa);
++		if (st != 0 || res != 0) {
++			goto out;
++		}
++		if (relocate) {
++			st = scm(SCM_FN(SCM_SVC_PIL, PIL_MEM_SETUP), 3, PAS_ID_WPSS, min_a,
++			    ((uint64_t)(max_a - min_a) + 0xfff) & ~0xfffull, &res);
++			LOG("mem_setup: ret=%llx res=%llx", st, res);
++			if (st != 0 || res != 0) {
++				goto shutdown;
++			}
++		}
++
++		for (uint32_t i = 0; i < eh->e_phnum; i++) {
++			char name[16];
++			if (!loadable(&ph[i])) {
++				continue;
++			}
++			/* map only while copying: TZ locks the carveout at auth_and_reset */
++			uint64_t pa = ph[i].p_paddr & ~0x3fffull, off = ph[i].p_paddr - pa;
++			uint64_t len = (off + ph[i].p_memsz + 0x3fff) & ~0x3fffull;
++			IOMemoryMap *m = map_phys(pa, len, true);
++			if (m == NULL) {
++				LOG("segment %u: cannot map %08x+%x", i, ph[i].p_paddr, ph[i].p_memsz);
++				goto shutdown;
++			}
++			uint8_t *dst = (uint8_t *)m->getVirtualAddress() + off;
++			int64_t got = 0;
++			if (ph[i].p_filesz != 0) {
++				snprintf(name, sizeof(name), FW_NAME ".b%02u", i);
++				got = fw_read(name, dst, ph[i].p_filesz);
++				if (got != (int64_t)ph[i].p_filesz) {
++					LOG("%s: %lld of %u bytes", name, got, ph[i].p_filesz);
++					m->release();
++					goto shutdown;
++				}
++			}
++			if (ph[i].p_memsz > got) {
++				bzero(dst + got, ph[i].p_memsz - got);
++			}
++			mb();
++			m->release();
++		}
++		LOG("segments loaded");
++
++		st = scm(SCM_FN(SCM_SVC_PIL, PIL_AUTH_RESET), 1, PAS_ID_WPSS, 0, 0, &res);
++		LOG("auth_and_reset: ret=%llx res=%llx resumes=%u", st, res, scm_resumes);
++		if (st != 0 || res != 0) {
++			goto shutdown;
++		}
++		ok = true;
++		goto out;
++	}
++shutdown:
++	st = scm(SCM_FN(SCM_SVC_PIL, PIL_SHUTDOWN), 1, PAS_ID_WPSS, 0, 0, &res);
++	LOG("shutdown after failure: ret=%llx res=%llx", st, res);
++out:
++	if (mdt != NULL) {
++		IOFree(mdt, mdt_size);
++	}
++	return ok;
++}
++
++static void
++sweet_wpss_thread(void *arg __unused, wait_result_t wr __unused)
++{
++	IOMemoryMap *smem_map, *pool_map;
++	unsigned watch = 60;
++
++	(void)PE_parse_boot_argn("wpss_watch", &watch, sizeof(watch));
++	/* the firmware lives on the root filesystem: wait for it */
++	for (int i = 0; i < 300; i++) {
++		vnode_t root = vfs_rootvnode();
++		if (root != NULLVP) {
++			vnode_put(root);
++			if (fw_size(FW_NAME ".mdt") > 0) {
++				break;
++			}
++		}
++		IOSleep(1000);
++	}
++	smem_map = map_phys(SMEM_PA, SMEM_SIZE, true);
++	pool_map = map_phys(WPSS_POOL_BASE, WPSS_POOL_SIZE, true);
++	ipcc = (volatile uint8_t *)ml_io_map(IPCC_PA, 0x1000);
++	tcsr_mutex = (volatile uint8_t *)ml_io_map(TCSR_MUTEX_PA, 0x4000);
++	if (smem_map == NULL || pool_map == NULL || ipcc == NULL || tcsr_mutex == NULL) {
++		LOG("mappings failed");
++		thread_terminate(current_thread());
++		return;
++	}
++	smem = (uint8_t *)smem_map->getVirtualAddress();
++	pool = (uint8_t *)pool_map->getVirtualAddress();
++	LOG("SMEM version %u", *(volatile uint32_t *)(smem + 64 + 7 * 4) >> 16);
++	if (wpss_boot()) {
++		wpss_watch(smem_partition(0, WPSS_REMOTE_PID), watch);
++	}
++	/* keep the mappings: the WPSS uses SMEM from now on */
++	thread_terminate(current_thread());
++}
++
++extern "C" void
++sweet_wpss_init(void)
++{
++	static bool started;
++	uint32_t on = 0;
++	thread_t thread;
++
++	if (started || !PE_parse_boot_argn("wpss", &on, sizeof(on)) || on == 0) {
++		return;
++	}
++	started = true;
++	if (kernel_thread_start(sweet_wpss_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	}
++}
++
++#else
++extern "C" void sweet_wpss_init(void) {}
++#endif
+diff --git a/iokit/conf/files.arm64 b/iokit/conf/files.arm64
+index c8ee61e5e677..28f690fb64d2 100644
+--- a/iokit/conf/files.arm64
++++ b/iokit/conf/files.arm64
+@@ -14,6 +14,7 @@ iokit/Kernel/arm/SweetEntitlements.cpp                           optional iokitc
+ iokit/Kernel/arm/SweetKeyStore.cpp                               optional iokitcpp
+ iokit/Kernel/arm/SweetWatchdog.cpp                               optional iokitcpp
+ iokit/Kernel/arm/SweetAMFI.cpp                                   optional iokitcpp
++iokit/Kernel/arm/SweetWpss.cpp                                   optional iokitcpp
+ iokit/Kernel/arm/SweetSurface.cpp                                optional iokitcpp
+ iokit/Kernel/arm/SweetFramebuffer.cpp                            optional iokitcpp
+ iokit/Kernel/arm/SweetNetwork.cpp                                optional iokitcpp
