@@ -1254,3 +1254,8 @@ load_bdf regdb (type 4 = REGDB) -> load_bdf board (bdwlan.elf, type 1 = ELF) -> 
 soc. BDF req (0x0025): 0x01 valid, 0x10 file_id=0, 0x11 total_size, 0x12 seg_id, 0x13 data(u16 len+bytes,
 <=6144), 0x14 end, 0x15 bdf_type. xnu 0119 (CI 39641453575): cap -> device_info -> regdb.bin -> bdwlan.elf,
 segmented. NEEDS regdb.bin + bdwlan.elf on the phone at /usr/share/firmware/spacewar/wpss/.
+0119 RESULT: cap ok (chip_id 1, board_id ff), device_info ok (bar_addr 0x61e00000), then "downloading
+regdb.bin" and NO response. Bug: qrtr_send had a 512-byte cap (from topaz 0118; 0121 enlarged it) so the
+~6 KB BDF segment was silently dropped. board data files copied to the phone (regdb.bin 24278, bdwlan.elf
+60000, sha256 verified). xnu 0120 (CI 39643639605): qrtr_send uses a heap buffer sized to the payload.
+Open Q: whether WCN6750 wants the REGDB download at all (supports_regdb) - if it errors, send only bdwlan.elf.
