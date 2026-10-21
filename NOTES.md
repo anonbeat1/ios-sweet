@@ -1268,3 +1268,38 @@ NEXT = Wi-Fi step 4/5 (the big one): the ath11k data path to actually scan/assoc
 (ath11k uses a separate 'ath11k' WMI channel, not QRTR) or the hybrid-bus HAL (CE copy engines, DP rings,
 HTT) against bar_addr 0x61e00000. This is thousands of lines (ath11k dp/hal/wmi) and the hardest part;
 not started. topaz 0123-0130 is ath10k WMI/HTT (wrong for ath11k). Step 1-3 (firmware up) is the reusable base.
+
+## Wi-Fi step 4/5 roadmap (2026-10-21, after FW_INIT_DONE)
+
+The WLAN firmware is up (step 3). What actual scan/associate needs, from ath11k (torvalds
+linux drivers/net/wireless/ath/ath11k, fetched to scratchpad: qmi.c, qmi.h, core.c, hw.c, ce.c,
+htc.h, ce.h). After FW_INIT_DONE, ath11k_core_qmi_firmware_ready does, in order:
+  1. ath11k_qmi_firmware_start(mode=mission=0): wlan_ini -> wlan_cfg(0x0023) -> wlan_mode(0x0022, mission).
+  2. ath11k_dp_alloc: allocate the HAL SRNG rings in DRAM (reo, tcl, wbm, rxdma, ce rings).
+  3. ath11k_core_start: WMI init over HTC/HTT, service_ready, htt setup, reg/caldata.
+  4. ath11k_core_pdev_create: register the pdev(s)/mac80211 hw.
+Only (1) is small. (2)-(4) are the ath11k HAL + DP + WMI + HTT data path: direct register
+programming at the WLAN BAR (device_info bar_addr = 0x61e00000), CE copy-engine rings,
+SRNG descriptors, interrupt/NAPI servicing. Thousands of lines; this is the mountain.
+
+WCN6750 = qca6390 CE tables (core.c wcn6750 hw_params: host_ce_config_qca6390, ce_count 9,
+target_ce_config_wlan_qca6390, target_ce_count 9, svc_to_ce_map_wlan_qca6390, len 14,
+single_pdev_only, supports_shadow_regs). Extracted for when step 4 is written:
+  CE pipe config (pipe_num, dir[OUT=2,IN=1,INOUT=3,INOUT_H2H=4], nentries, nbytes_max, flags
+  [CE_ATTR_FLAGS=0, DIS_INTR=8]):
+    0 OUT 32 2048 0; 1 IN 32 2048 0; 2 IN 32 2048 0; 3 OUT 32 2048 0;
+    4 OUT 256 256 8; 5 IN 32 2048 0; 6 INOUT 32 16384 0; 7 INOUT_H2H 0 0 8; 8 INOUT 32 16384 0.
+  service->pipe map (svc id = (grp<<8)|idx: RSVD_CTRL 0x001, WMI_CONTROL 0x100, WMI_DATA_BE 0x101,
+  BK 0x102, VI 0x103, VO 0x104, HTT_DATA_MSG 0x300):
+    104 OUT 3; 104 IN 2; 102 OUT 3; 102 IN 2; 101 OUT 3; 101 IN 2; 103 OUT 3; 103 IN 2;
+    100 OUT 3; 100 IN 2; 001 OUT 0; 001 IN 2; 300 OUT 4; 300 IN 1.
+  (Note: nearly identical to topaz's ath10k w_tgt_ce/w_svc_ce; topaz 0123-0130 WMI/HTT is a
+  useful reference despite ath10k vs ath11k differences.)
+  wlan_cfg (0x0023) TLVs: 0x10 host_version(string), 0x11 tgt_cfg(struct[5 u32]: pipe_num,dir,
+  nentries,nbytes_max,flags), 0x12 svc_cfg(struct[3 u32]: service_id,dir,pipe_num), 0x13/0x14/
+  0x17 shadow regs. shadow_reg_v2 is derived from the host's real CE ring setup, so it needs the
+  HAL/DP work first (send wlan_cfg with shadow valid=0 until then).
+Decision (2026-10-21): stop Wi-Fi at step 3 (firmware up) for now. wlan_mode(mission) without
+the host CE rings/DP would make the FW DMA to rings that do not exist (hang/fault risk), so it
+is NOT worth sending blind. Step 4/5 (HAL/DP/WMI/HTT) is a separate large effort; the firmware-up
+base (0108-0120) and this roadmap are the reusable foundation.
