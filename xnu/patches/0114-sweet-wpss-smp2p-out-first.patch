@@ -1,0 +1,47 @@
+diff --git a/iokit/Kernel/arm/SweetWpss.cpp b/iokit/Kernel/arm/SweetWpss.cpp
+index e0c60ffc1bcf..316d6ab3d227 100644
+--- a/iokit/Kernel/arm/SweetWpss.cpp
++++ b/iokit/Kernel/arm/SweetWpss.cpp
+@@ -456,6 +456,24 @@ smp2p_find(struct smp2p_hdr *h, const char *name)
+ 	return NULL;
+ }
+ 
++static volatile uint32_t *
++smp2p_add_out(struct smp2p_hdr *o, const char *name, uint32_t value)
++{
++	struct smp2p_entry *e = (struct smp2p_entry *)(o + 1);
++	volatile uint32_t *v = smp2p_find(o, name);
++
++	if (v != NULL || o->valid >= o->total || o->valid >= SMP2P_MAX_ENTRY) {
++		return v;
++	}
++	bzero(e[o->valid].name, sizeof(e[o->valid].name));
++	strlcpy(e[o->valid].name, name, sizeof(e[o->valid].name));
++	e[o->valid].value = value;
++	mb();
++	o->valid++;
++	smp2p_kick();
++	return &e[o->valid - 1].value;
++}
++
+ /*
+  * After auth_and_reset: watch the WPSS's "slave-kernel" entry (bit0 fatal, bit1 ready,
+  * bit2 handover) and log every change; on fatal print the crash reason (SMEM item 626).
+@@ -779,6 +797,17 @@ wpss_boot(void)
+ 		/* DT qcom,proxy-reg-names vdd_cx vdd_mx, qcom,vdd_*-uV-uA <384 100000> */
+ 		LOG("ARC cx.lvl 384: %d", sweet_rpmh_arc_vote("cx.lvl", 384));
+ 		LOG("ARC mx.lvl 384: %d", sweet_rpmh_arc_vote("mx.lvl", 384));
++		{
++			/*
++			 * Linux's smp2p driver creates the outbound item at probe, long before the
++			 * remoteproc starts, with the DT entries (qcom,smp2p-wpss: master-kernel, wlan).
++			 */
++			struct smp2p_hdr *o = smp2p_create_out(part);
++			bool mk = o != NULL && smp2p_add_out(o, "master-kernel", 0) != NULL;
++			bool wl = o != NULL && smp2p_add_out(o, "wlan", 0) != NULL;
++			LOG("SMP2P out %u before start: %s, master-kernel %d, wlan %d, valid %u", ITEM_SMP2P_OUT,
++			    o != NULL ? "ok" : "FAILED", mk, wl, o != NULL ? o->valid : 0);
++		}
+ 
+ 		st = scm(SCM_FN(SCM_SVC_PIL, PIL_AUTH_RESET), 1, PAS_ID_WPSS, 0, 0, &res);
+ 		LOG("auth_and_reset: ret=%llx res=%llx resumes=%u", st, res, scm_resumes);
