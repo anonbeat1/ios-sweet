@@ -1,5 +1,47 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## GPU / Metal driver (started 2026-10-21) - Spacewar first
+
+Goal: GPU-accelerated rendering on Spacewar (Adreno 642L), ultimately a Metal device for QuartzCore/CoreImage/apps.
+Decided with the user 2026-10-21 ("procediamo"); device NOT with the user that day, so everything below is offline work.
+
+Architecture (plan, nothing of it runs yet):
+1. Kernel Adreno driver in XNU: GPU_CC clocks + CX GDSC, GMU firmware boot (powers GX), zap shader via TZ (SCM PAS),
+   SQE microcode, ringbuffer, Adreno SMMU (HLOS-owned arm,mmu-500 @0x3da0000 in mainline), IRQ (SPI 300 gpu, 304/305 gmu).
+2. IOKit service that Metal.framework matches (IOAccelerator/IOGPU-style; exact properties/bundle keys = Phase 0) + our own
+   user client (memory, queues, submit).
+3. Userland Metal driver bundle in /System/Library/Extensions (MTLDevice etc.); Apple's AGXMetalA11 cannot be reused.
+4. Shader compiler AIR (Apple LLVM bitcode, what metallibs ship) -> Adreno ISA. Candidate path AIR -> SPIR-V -> NIR -> Mesa ir3.
+   Biggest piece. Alternative to check first: QuartzCore CA::OGL::GLESContext + a Mesa freedreno GLES (guess, unverified).
+
+Upstream facts (observed in mainline Linux source, not yet on hardware; sparse clone of torvalds/linux was used):
+- Mainline HAS `arch/arm64/boot/dts/qcom/sm7325-nothing-spacewar.dts` (includes sm7325.dtsi -> kodiak.dtsi) with `&gpu`
+  okay and zap `qcom/sm7325/nothing/spacewar/a660_zap.mbn` -> msm + Mesa freedreno/turnip are a working reference for this GPU.
+- kodiak.dtsi: gpu@3d00000 `qcom,adreno-635.0` (regs 0x3d00000/0x40000, cx_mem 0x3d9e000, cx_dbgc 0x3d61000), gmu@3d6a000
+  (0x34000; rscc 0x3de0000; gmu_pdc 0xb290000), gpucc@3d90000 (0x9000), adreno_smmu@3da0000, zap mem 0x8b71a000 size 0x2000
+  (Spacewar dts does not move it). OPPs 315..900 MHz (speed bin fuse). GMU iommu = adreno_smmu SID 5; GPU SIDs 0 and 1.
+- a6xx_catalog.c: chip id 0x06030500, ADRENO_6XX_GEN4, a660_sqe.fw + a660_gmu.bin (public in linux-firmware qcom/),
+  zap a660_zap.mbn (device-signed: take it from the Spacewar vendor partition / stock archive, keep out of git), GMEM 512K.
+- GMU register addresses = GPU base + 4 * dword offset from a6xx_gmu.xml (GMU_BYTE_OFFSET).
+- gpucc-sc7280.c: CX GDSC 0x106c (VOTABLE, status in gds_hw_ctrl 0x1540), GX GDSC 0x100c (clamp 0x1508, powered by GMU fw),
+  ahb 0x1078, cxo 0x109c, cx_gmu 0x1098, hub_cx_int 0x1204, hlos1_vote_smmu 0x5000, cb 0x1170, gmu RCG 0x1120, hub RCG 0x117c.
+  gcc-sc7280.c: GPU_CFG_AHB 0x71004 (Linux always-on), MEMNOC_GFX 0x7100c, SNOC_DVM 0x71018, DDRSS_GPU_AXI 0x71154,
+  vote 0x52000 bits 15/16 (gpu_gpll0 / div). TODO: confirm all addresses against the stock Spacewar DT on the Mac.
+
+Phase 0 (needs the dyld cache, user's machine): (a) how Metal.framework picks a driver (IOService class it matches,
+registry keys naming the bundle/class, what MTLCreateSystemDefaultDevice does with none -> SpringBoard "Failed to get Metal
+device"); (b) whether QuartzCore can still select its GLES renderer (CA_ENABLE_OGL) without Metal.
+
+**Phase 1 / shim GPU probe 1 (written 2026-10-21, built, NOT booted):** `shim/gpuprobe.c`, only with
+`EXTRA_CFLAGS=-DGPUPROBE ./build-spacewar.sh` (default builds unchanged; the GPU probe then replaces cpufreq/touch and resets
+after 3 min). Screen: GCC GPU branch CBCRs, enables GCC_GPU_CFG_AHB_CLK, GPU_CC GDSC/branch/RCG registers; then GCC bus clocks +
+GPLL0 votes, CX GDSC on, GPU_CC CX clocks on, then GMU registers (CM3 sysreset/fw init, RPMh power state, SPTPRAC, HFI,
+GENERAL_0/7, AO irq, GX_DOMAIN_MISC). Stops early (no GMU access) if the AHB clock, CX GDSC or GMU clocks do not come on.
+GX is not touched. Linux-built image `shim/out/spacewar-gpuprobe1.img` (sha256 319dc01b..., empty ramdisk); on the Mac just
+rebuild with the command above. Expected: "CX GDSC on=1", CC on mask 0x3f (bits 4/5 unchecked), readable GMU registers.
+Next after probe 1: probe 2 = load a660_gmu.bin (ITCM/DTCM blocks + memory behind adreno_smmu SID 5), boot the GMU, OOB GX
+on, read RBBM/CP registers; then zap via SCM, SQE load, CP_MEM_WRITE through a ringbuffer.
+
 ## Second port: Nothing Phone (1) "Spacewar" (SM7325P / YupikP) - started 2026-10-19
 
 Separate effort from sweet; sweet handoff below is unchanged.

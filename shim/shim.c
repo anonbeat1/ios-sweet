@@ -14,6 +14,7 @@
 #ifdef SPACEWAR
 #include "touchprobe.h"
 #include "cpufreq.h"
+#include "gpuprobe.h"
 #endif
 
 #define IMEM_RESTART_REASON	0x146aa65cUL	/* qcom,msm-imem restart_reason@65c */
@@ -400,6 +401,15 @@ void shim_main(uint64_t dtb)
 	con_skip();
 	con_str("LOADER", loader_boot(dtb));	/* returns only without a payload */
 	con_skip();
+#ifdef GPUPROBE
+	/* EXTRA_CFLAGS=-DGPUPROBE ./build-spacewar.sh: GPU probe only. */
+	stage = "gpu";
+	con_clear(BLUE);
+	gpu_probe();
+	con_str("GPU", "reset in ~3 min");
+	delay_ms(180000);
+	reset(1);
+#endif
 	stage = "cpufreq";
 	con_clear(BLUE);
 	cpufreq_probe();	/* EPSS levels + loop timing before/after max */
