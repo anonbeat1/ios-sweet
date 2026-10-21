@@ -1209,3 +1209,9 @@ doorbell every second while 616 is missing, dump 617/480/605/611 and global 616.
 612 628 626. User: continue Wi-Fi. xnu 0114 (CI 39630544639): the outbound item 617 is created with entries
 master-kernel=0 and wlan=0 (DT qcom,smp2p-wpss) BEFORE auth_and_reset, as Linux's smp2p probe does (we
 used to create it empty after the start). Image shim/out/spacewar-xnu-0114-wpss.img.
+0114 RESULT + gpt-6-astra brainstorm (read-only agent): the 617 dump after the run reads local pid 13,
+remote 0, valid 0 with our "master-kernel"/"wlan" names still below -> the WPSS took 617 over as ITS
+outbound item. qcom,smem = <617 616> is <inbound outbound> (Linux smp2p.c SMP2P_INBOUND=0/OUTBOUND=1; topaz
+modem <435 428> = in 435, out 428). 0108-0114 had the direction swapped. xnu 0115 (CI 39632918927): out 616,
+in 617. Other agent hypotheses kept for later: icnss 'wlan' smp2p power-on bit, WCN6750 rails (S1 1.8 V,
+S8 1.28 V, uV units), GLINK 478/479 APSS side, IPCC RECV clear, 605 = live WPSS timestamps.
