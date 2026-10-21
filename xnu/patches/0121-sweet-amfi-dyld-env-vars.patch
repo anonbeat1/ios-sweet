@@ -1,0 +1,31 @@
+diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
+index 9f84c6d7c104..b71e31947094 100644
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -310,11 +310,14 @@ sweet_sandbox_syscall(struct proc *p, int call, __unused user_addr_t arg)
+  * is amfi_check_dyld_policy_self(). Without a policy named "AMFI" it failed
+  * with ENOPOLICY, which dyld treats as "no permissions" and libsystem_trace
+  * (_os_trace_init_slow) as "development env vars not allowed", so
+- * OS_ACTIVITY_DT_MODE was ignored. Answer with only bit 8 (allow
+- * development env vars, checked by libsystem_trace; dyld uses bits 0-7,
+- * which stay clear as before). Other AMFI calls keep failing.
++ * OS_ACTIVITY_DT_MODE was ignored. Answer with bit 8 (allow development env
++ * vars, checked by libsystem_trace) and bit 1 (allow DYLD_* env vars in dyld:
++ * dyld's ProcessConfig::PathOverrides only reads the process environment,
++ * so DYLD_INSERT_LIBRARIES, when Security+3 = bit 1 is clear, is ignored;
++ * see research/coreimage-plan.md). Other AMFI calls keep failing.
+  */
+ #define SWEET_AMFI_DYLD_POLICY          0x5a
++#define SWEET_AMFI_ALLOW_DYLD_ENV_VARS  (1ULL << 1)
+ #define SWEET_AMFI_ALLOW_DEV_ENV_VARS   (1ULL << 8)
+ 
+ static int
+@@ -324,7 +327,7 @@ sweet_amfi_syscall(__unused struct proc *p, int call, user_addr_t arg)
+ 		uint64_t input;
+ 		uint64_t output;        /* user pointer to uint64_t */
+ 	} args;
+-	uint64_t flags = SWEET_AMFI_ALLOW_DEV_ENV_VARS;
++	uint64_t flags = SWEET_AMFI_ALLOW_DEV_ENV_VARS | SWEET_AMFI_ALLOW_DYLD_ENV_VARS;
+ 
+ 	if (call != SWEET_AMFI_DYLD_POLICY) {
+ 		return ENOPOLICY;
