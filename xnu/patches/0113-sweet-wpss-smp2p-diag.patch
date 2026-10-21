@@ -1,0 +1,72 @@
+diff --git a/iokit/Kernel/arm/SweetWpss.cpp b/iokit/Kernel/arm/SweetWpss.cpp
+index b6d0d8dc2dae..e0c60ffc1bcf 100644
+--- a/iokit/Kernel/arm/SweetWpss.cpp
++++ b/iokit/Kernel/arm/SweetWpss.cpp
+@@ -390,6 +390,26 @@ smem_list(struct smem_part_hdr *p, const char *what)
+ 	    p->free_uncached, p->size, line);
+ }
+ 
++/* Log size and the first 64 bytes of an item (hex), to identify what the remote created. */
++static void
++smem_dump(struct smem_part_hdr *p, uint16_t item, const char *where)
++{
++	uint32_t sz = 0;
++	const uint8_t *v = (const uint8_t *)smem_get(p, item, &sz);
++	char hex[64 * 3 + 1];
++	size_t len = 0;
++
++	if (v == NULL) {
++		LOG("item %u (%s): absent", item, where);
++		return;
++	}
++	hex[0] = '\0';
++	for (uint32_t i = 0; i < sz && i < 64; i++) {
++		len += (size_t)snprintf(hex + len, sizeof(hex) - len, "%02x ", v[i]);
++	}
++	LOG("item %u (%s): %u bytes: %s", item, where, sz, hex);
++}
++
+ /* ---------------------------------------------------------------- SMP2P */
+ 
+ /* qcom-ipcc: SEND_ID = client id (31:16) | signal id (15:0) rings the remote's doorbell */
+@@ -455,14 +475,26 @@ wpss_watch(struct smem_part_hdr *part, unsigned seconds)
+ 	for (unsigned ms = 0; ms < seconds * 1000; ms++) {
+ 		if (in == NULL) {
+ 			uint32_t sz = 0;
++			const char *where = "apps<->wpss";
+ 			in = (struct smp2p_hdr *)smem_get(part, ITEM_SMP2P_IN, &sz);
++			if (in == NULL) {
++				/* qcom_smem_get() falls back to the global partition */
++				in = (struct smp2p_hdr *)smem_get(smem_partition(SMEM_GLOBAL_HOST, SMEM_GLOBAL_HOST),
++				    ITEM_SMP2P_IN, &sz);
++				where = "global";
++			}
+ 			if (in != NULL && in->magic != SMP2P_MAGIC) {
++				LOG("t=%u ms: item %u in %s but magic %08x", ms, ITEM_SMP2P_IN, where, in->magic);
+ 				in = NULL;
+ 			}
+ 			if (in != NULL) {
+-				LOG("t=%u ms: WPSS SMP2P item %u up (v%u, %u entries)", ms, ITEM_SMP2P_IN, in->version, in->valid);
++				LOG("t=%u ms: WPSS SMP2P item %u up in %s (v%u, %u entries)", ms, ITEM_SMP2P_IN,
++				    where, in->version, in->valid);
+ 			}
+ 		}
++		if (in == NULL && ms % 1000 == 999) {
++			smp2p_kick();               /* in case the first doorbell was lost */
++		}
+ 		if (in != NULL && sk == NULL) {
+ 			sk = smp2p_find(in, "slave-kernel");
+ 		}
+@@ -489,6 +521,12 @@ wpss_watch(struct smem_part_hdr *part, unsigned seconds)
+ 	}
+ 	LOG("watch done: slave-kernel %08x, %s", sk_last, ready ? "READY" : "NOT ready");
+ 	smem_list(part, "apps<->wpss");
++	smem_list(smem_partition(SMEM_GLOBAL_HOST, SMEM_GLOBAL_HOST), "global");
++	smem_dump(part, ITEM_SMP2P_OUT, "apps<->wpss");
++	smem_dump(part, 480, "apps<->wpss");
++	smem_dump(part, 605, "apps<->wpss");
++	smem_dump(part, 611, "apps<->wpss");
++	smem_dump(smem_partition(SMEM_GLOBAL_HOST, SMEM_GLOBAL_HOST), ITEM_SMP2P_IN, "global");
+ 	{
+ 		uint32_t sz = 0;
+ 		const char *why = (const char *)smem_get(smem_partition(SMEM_GLOBAL_HOST, SMEM_GLOBAL_HOST), ITEM_WPSS_CRASH, &sz);
