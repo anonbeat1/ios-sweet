@@ -1,0 +1,53 @@
+diff --git a/iokit/Kernel/arm/SweetWpss.cpp b/iokit/Kernel/arm/SweetWpss.cpp
+index b46568d60a97..1ba554fce5b2 100644
+--- a/iokit/Kernel/arm/SweetWpss.cpp
++++ b/iokit/Kernel/arm/SweetWpss.cpp
+@@ -153,6 +153,7 @@ smc(uint64_t a[8])
+ }
+ 
+ static unsigned scm_resumes;
++static uint64_t scm_last[4];                    /* x0..x3 of the last call, for the log */
+ 
+ static uint64_t
+ scm(uint32_t fn, uint64_t arginfo, uint64_t a, uint64_t b, uint64_t c, uint64_t *res1)
+@@ -168,6 +169,7 @@ scm(uint32_t fn, uint64_t arginfo, uint64_t a, uint64_t b, uint64_t c, uint64_t
+ 		smc(args);
+ 	}
+ 	scm_resumes = n;
++	memcpy(scm_last, args, sizeof(scm_last));
+ 	if (res1 != NULL) {
+ 		*res1 = args[1];
+ 	}
+@@ -462,10 +464,20 @@ wpss_boot(void)
+ 		LOG("WPSS SMP2P item %u already exists: WPSS is not cold, not touching it", ITEM_SMP2P_IN);
+ 		return false;
+ 	}
++	/* qcom_scm __qcom_scm_is_call_available(): SVC_INFO 0x06, IS_CALL_AVAIL 0x01 */
++	for (uint32_t cmd = PIL_INIT_IMAGE; cmd <= PIL_IS_SUPPORTED; cmd++) {
++		st = scm(SCM_FN(0x06, 0x01), 1, SCM_FN(SCM_SVC_PIL, cmd), 0, 0, &res);
++		LOG("call PIL %u available: ret=%llx res=%llx", cmd, st, res);
++	}
+ 	st = scm(SCM_FN(SCM_SVC_PIL, PIL_IS_SUPPORTED), 1, PAS_ID_WPSS, 0, 0, &res);
+-	LOG("PAS id %u supported: ret=%llx res=%llx", PAS_ID_WPSS, st, res);
++	LOG("PAS id %u supported: ret=%llx res=%llx (x2 %llx x3 %llx)", PAS_ID_WPSS, st, res,
++	    scm_last[2], scm_last[3]);
++	/*
++	 * 0108 boot: ret=0 res=0 although Android boots the WPSS with PAS id 6. Advisory only:
++	 * init_image below fails with an explicit error if TZ really refuses this PAS id.
++	 */
+ 	if (st != 0 || res != 1) {
+-		return false;
++		LOG("is_supported says no; trying init_image anyway");
+ 	}
+ 
+ 	mdt_size = fw_size(FW_NAME ".mdt");
+@@ -517,7 +529,8 @@ wpss_boot(void)
+ 		mb();
+ 
+ 		st = scm(SCM_FN(SCM_SVC_PIL, PIL_INIT_IMAGE), 2 | (SCM_ARG_RW << 6), PAS_ID_WPSS, meta_pa, 0, &res);
+-		LOG("init_image: ret=%llx res=%llx resumes=%u (meta %llu bytes @%llx)", st, res, scm_resumes, meta_size, meta_pa);
++		LOG("init_image: ret=%llx res=%llx (x2 %llx x3 %llx) resumes=%u (meta %llu bytes @%llx)", st, res,
++		    scm_last[2], scm_last[3], scm_resumes, meta_size, meta_pa);
+ 		if (st != 0 || res != 0) {
+ 			goto out;
+ 		}
