@@ -1235,3 +1235,9 @@ READY t=34 ms; glink VERSION 1 features 7 -> VERSION_ACK features 1; WPSS opens 
 Services (each listed twice in our table): 42:6f01 port 2 servreg-notif, 2b:1902 port 1 ssctl, f:8001 port 6,
 33:301 port 7, 16:1001 port 8, 45:301 port a WLFW. Next = step 3: WLFW QMI (topaz 0122 is ath10k; WCN6750
 is ath11k: host-cap / ind-register / respond-mem / cal / BDF download from qca6750/bdwlan.*, regdb).
+xnu 0117 (CI 39637718683): Wi-Fi step 3a. QMI plumbing in SweetWpss.cpp (wm_new/wm_tlv/wm_u8/wm_u32/wm_send,
+qm_find, w_result), client port 0x4004, qrtr DATA to PORT_WLFWC -> wlfw_rx. On WLFW announce: ind_register
+(ath11k enables incl. request_mem/fw_mem_ready/fw_init_done) -> on resp, host_cap (num_clients, bdf/m3
+support). Every WLFW indication/response is hex-dumped (w_hex) so the phone reveals the real ath11k order
+(ath11k = REQUEST_MEM ind -> RESPOND_MEM -> MEM_READY -> CAP -> BDF -> M3 -> cal -> FW_INIT_DONE). Diagnostic
+first: 0117 only sends ind_register + host_cap, then observes.
