@@ -1,0 +1,57 @@
+From 66d9542c49f050d250602aa6e4a8a46bc1a44788 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 07:33:01 +0000
+Subject: [PATCH] sweet-0108: empty IOAcceleratorES service (QuartzCore waited
+ 30 s for one at every backboardd start); sweetaccel=0 turns it off
+
+Ported from ios-topaz (MakrSas/ios-topaz) patch topaz-0138.
+---
+ iokit/Kernel/arm/SweetFramebuffer.cpp | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 5b1a848..ed40fb4 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -137,6 +137,20 @@ public:
+ 
+ OSDefineMetaClassAndStructors(AppleCLCD, IOMobileFramebuffer);
+ 
++/*
++ * The graphics accelerator's service class. QuartzCore (CAMetalContextCreate,
++ * once per process) polls IOServiceMatching("IOAcceleratorES") 300 times,
++ * 100 ms apart, before it goes on: thirty seconds at every backboardd start.
++ * One without MetalPluginName/MetalPluginClassName is found and then passed
++ * over by Metal, which leaves the CPU renderer as it was.
++ * From ios-topaz (MakrSas/ios-topaz, patch topaz-0138).
++ */
++class IOAcceleratorES : public IOService {
++	OSDeclareDefaultStructors(IOAcceleratorES);
++};
++
++OSDefineMetaClassAndStructors(IOAcceleratorES, IOService);
++
+ class IOMobileFramebufferUserClient : public IOUserClient {
+ 	OSDeclareDefaultStructors(IOMobileFramebufferUserClient);
+ 
+@@ -235,6 +249,17 @@ AppleCLCD::start(IOService *provider)
+ 	setProperty("external", false);
+ 	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
+ 	registerService();
++	uint32_t accelOn = 1;
++	PE_parse_boot_argn("sweetaccel", &accelOn, sizeof(accelOn));
++	IOAcceleratorES *accel = accelOn ? OSTypeAlloc(IOAcceleratorES) : NULL;
++	if (accel != NULL && accel->init()) {
++		accel->setName("sgx");
++		if (accel->attach(this)) {
++			accel->registerService();
++			IOLog("SWEET FB: empty IOAcceleratorES published (sweetaccel=0 turns it off)\n");
++		}
++	}
++	OSSafeReleaseNULL(accel);
+ 	IOLog("SWEET FB: AppleCLCD %ux%u stride %u at 0x%llx, default surface %u, presented as %ux%u\n",
+ 	    fWidth, fHeight, fRowBytes, fPhys, fSurface->id, fLogicalW, fLogicalH);
+ 	return true;
+-- 
+2.43.0
+

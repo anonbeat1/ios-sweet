@@ -1,5 +1,29 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## ios-topaz (MakrSas/ios-topaz) - fork of this project, ideas to port back (2026-10-21)
+
+Redmi Note 12 4G (SM6225) fork of ios-sweet (README credits dipa-studio/ios-sweet; no LICENSE file in either repo, so
+credit Makr / ios-topaz in every ported commit). As of 2026-10-20 they report home screen + touch/keys + **Wi-Fi in iOS**
+(wifid, WPA2, Safari over HTTPS). Their README says Adreno 610 GPU acceleration works "with patches from HackiOS", which are
+NOT public (unverified claim; HackiOS itself has no source). Clone for reading: scratch only, not in git.
+Useful patches (topaz numbering), status for us:
+- topaz-0138 empty IOAcceleratorES -> **ported as our 0108** (`0108-sweet-empty-ioacceleratores.patch`, applies after 0107;
+  reconstructed SweetFramebuffer.cpp from 0046/0054/0056/0061/0067/0079/0107 hunks). Their claim: QuartzCore
+  (CAMetalContextCreate) polls IOServiceMatching("IOAcceleratorES") 300 x 100 ms = 30 s per backboardd start; a service
+  without MetalPluginName is skipped by Metal. Our 0052n log also showed backboardd polling IOAcceleratorES. Boot-arg
+  `sweetaccel=0` disables it. NOT built / NOT booted yet. Expect `SWEET FB: empty IOAcceleratorES published` and a faster GUI start.
+- topaz-0101/0107/0111 "real dcache ops": NOT needed here. Their fork hit no-op flush_dcache under __ARM_COHERENT_IO__; our
+  SWEET.h (0004) defines neither __ARM_COHERENT_IO__ nor APPLE_ARM64_ARCH_FAMILY, so xnu-8796 caches.c takes the
+  non-coherent path and FlushPoC_DcacheRegion does dc civac (checked in source, 2026-10-21).
+- topaz-0092/0093/0100/0102 direct MDP scanout of iOS surfaces (double buffered): biggest smoothness win without a GPU; their
+  panel is likely video mode, Spacewar's rm692e5 is DSI command mode (our probes 1-4: any CTL_START kick froze it) -> study.
+- topaz-0104/0105/0106/0110 DSI brightness, AppleARMBacklight, DCS display on/off: approach reusable, panel commands differ.
+- topaz-0091 battery gauge + charger: different PMIC, structure reusable.
+- topaz-0113..0130 Wi-Fi (~9k lines: modem PAS boot via TZ, GLINK/QRTR, pd-mapper/tftp/rmtfs, WLFW, CE/HTC/WMI/HTT, scan,
+  station, WPA2 4-way in kernel, wifid glue). Their WCN3988 firmware runs in the modem (ath10k-snoc style); Spacewar's
+  WCN6750 runs in WPSS (ath11k style): QRTR/host services/WLFW/wifid layers reusable, chip data path must be rewritten.
+- topaz-0131..0137/0139 SweetSurface fixes (client address/zombie/detach): check against our bugs.
+
 ## GPU / Metal driver (started 2026-10-21) - Spacewar first
 
 Goal: GPU-accelerated rendering on Spacewar (Adreno 642L), ultimately a Metal device for QuartzCore/CoreImage/apps.
