@@ -1228,3 +1228,10 @@ xnu 0116 (CI 39635203439): GLINK/QRTR block of topaz 0118 ported into SweetWpss.
 0x4000 exactly as left by the bootloader, WPSS TX 480; channel IPCRTR; doorbell IPCC client 24 signal 0 from DT
 glink_wpss mboxes <ipcc 24 0>; DT qcom,intents <0x800 5 0x2000 3 0x4400 2>, we advertise 8 x 0x4400). Started
 after READY inside wpss_watch, polled every ms; summary lists the QRTR services (WLFW = 0x45).
+**MILESTONE (2026-10-21 ~18:42, 0116, shim/out/spacewar-xnu-0116-wpss.img): WI-FI STEP 2 DONE, first try.**
+READY t=34 ms; glink VERSION 1 features 7 -> VERSION_ACK features 1; WPSS opens "glink_ssr" (rcid 1),
+"IPCRTR" (rcid 2), "LOOPBACK_CTL_WPSS" (rcid 3); IPCRTR up both ways t=36 ms; qrtr v1 HELLO from node 13;
+**"WLFW service 0x45 up: inst 301 node 13 port a"** at t=39 ms. 51 msgs rx / 21 tx, 30 WPSS intents, 0 drops.
+Services (each listed twice in our table): 42:6f01 port 2 servreg-notif, 2b:1902 port 1 ssctl, f:8001 port 6,
+33:301 port 7, 16:1001 port 8, 45:301 port a WLFW. Next = step 3: WLFW QMI (topaz 0122 is ath10k; WCN6750
+is ath11k: host-cap / ind-register / respond-mem / cal / BDF download from qca6750/bdwlan.*, regdb).
