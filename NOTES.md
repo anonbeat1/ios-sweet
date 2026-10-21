@@ -1175,3 +1175,7 @@ started from AppleCLCD::start, logs "SWEET WPSS: ...". Needs the firmware on the
 shim/out/spacewar-xnu-0108-wpss.img (= 0107-scale2 cmdline + wpss=1, ADT sweet-0107sw-s2). NOT booted yet.
 Firmware installed on the phone 2026-10-21 ~16:45: /usr/share/firmware/spacewar/wpss/wpss.{mdt,b00..b07}
 (root:wheel 644, sha256 identical to research/wpss-fw/image/).
+0108 BOOTED (2026-10-21 ~16:50, logs/spacewar-0108.txt): "SMEM version 12", "SMEM apps<->wpss partition"
+found (mappings + SMEM parsing OK), then "PAS id 6 supported: ret=0 res=0" -> stopped (TZ says not supported,
+although Android boots WPSS with pas-id 6). xnu 0109 (CI 39619347976): is_supported advisory, logs x0-x3,
+queries SVC_INFO IS_CALL_AVAIL for PIL cmds 1..7, then tries init_image anyway.
