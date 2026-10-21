@@ -1,0 +1,269 @@
+diff --git a/bsd/dev/sweet_rpmh.c b/bsd/dev/sweet_rpmh.c
+index eeeeec5d978e..585008acf79c 100644
+--- a/bsd/dev/sweet_rpmh.c
++++ b/bsd/dev/sweet_rpmh.c
+@@ -13,6 +13,7 @@
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
++int sweet_rpmh_arc_vote(const char *res, unsigned level);
+ 
+ /* Live downstream DT has two positional reg entries, no reg-names. */
+ #define RH_RSC_PA       0x18220000u
+@@ -44,6 +45,7 @@ int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
+ #define RH_DB_HEADER    144u
+ #define RH_DB_ENTRY     24u
+ #define RH_DB_MAX       0x100000u /* policy bound, not a DT size */
++#define RH_ARC          3u
+ #define RH_VRM          4u
+ #define RH_TIMEOUT_US   100000u
+ 
+@@ -173,7 +175,7 @@ rh_map(void)
+ }
+ 
+ static int
+-rh_lookup(const char *res, uint32_t *address)
++rh_lookup(const char *res, unsigned want, uint32_t *address, uint32_t *aux_off, uint32_t *aux_len)
+ {
+ 	uint32_t key[2] = {0, 0};
+ 	for (unsigned i = 0; i < 8 && res[i]; ++i) {
+@@ -200,12 +202,18 @@ rh_lookup(const char *res, uint32_t *address)
+ 				continue;
+ 			}
+ 			uint32_t addr = rh_read(rh_db, e + 16);
+-			if (slave != RH_VRM || (addr >> 16) != RH_VRM || (addr & 15u) ||
++			if (slave != want || (addr >> 16) != want || (addr & (want == RH_VRM ? 15u : 3u)) ||
+ 			    !rh_range(aux + rh_db16(e + 22), rh_db16(e + 20))) {
+-				printf("SWEET RPMH: invalid VRM entry for %s\n", res);
++				printf("SWEET RPMH: invalid slave-%u entry for %s\n", want, res);
+ 				return EINVAL;
+ 			}
+ 			*address = addr;
++			if (aux_off != NULL) {
++				*aux_off = aux + rh_db16(e + 22);
++			}
++			if (aux_len != NULL) {
++				*aux_len = rh_db16(e + 20);
++			}
+ 			++matches;
+ 			printf("SWEET RPMH: %s addr=%#x slave=%u aux-version=%#x priority=%#x:%#x\n",
+ 			    res, addr, slave, rh_db16(h + 8),
+@@ -232,9 +240,14 @@ rh_free(unsigned t)
+ 	    !(rh_read(rh_tcs, RH_IRQ_STATUS) & (1u << t));
+ }
+ 
++/* One ACTIVE TCS transaction of n commands at address + offsets[i] = values[i] (n <= 3). */
+ static int
+-rh_send(uint32_t address, unsigned mv)
++rh_send(uint32_t address, unsigned n, const uint32_t *offsets, const uint32_t *values)
+ {
++	if (n == 0 || n > 3) {
++		return EINVAL;
++	}
++	uint32_t mask = (1u << n) - 1u;
+ 	int chosen = -1;
+ 	for (unsigned t = 0; t < RH_ACTIVE_N; ++t) {
+ 		uint32_t b = t * RH_TCS_STRIDE;
+@@ -280,11 +293,9 @@ rh_send(uint32_t address, unsigned mv)
+ 	}
+ 	/* From here an uncertain write/timeout quarantines our slot for this boot. */
+ 	rh_poisoned = true;
+-	/* HPM (raw 7) is supported by this PMIC5 LDO; enable comes last. */
+-	const uint32_t offsets[3] = {0, 8, 4};
+-	const uint32_t values[3] = {mv, 7, 1};
+-	printf("SWEET RPMH: TCS%u ACTIVE %u mV mode=7 enable=1 irq-enable=%#x\n", t, mv, irq_en);
+-	for (unsigned c = 0; c < 3; ++c) {
++	printf("SWEET RPMH: TCS%u ACTIVE addr=%#x n=%u first=%#x irq-enable=%#x\n",
++	    t, address, n, values[0], irq_en);
++	for (unsigned c = 0; c < n; ++c) {
+ 		uint32_t cmd = b + c * RH_CMD_STRIDE;
+ 		if (!rh_sync(cmd + RH_MSGID, RH_WRITE_ACK) ||
+ 		    !rh_sync(cmd + RH_ADDR, address + offsets[c]) ||
+@@ -292,7 +303,7 @@ rh_send(uint32_t address, unsigned mv)
+ 			return EIO;
+ 		}
+ 	}
+-	if (!rh_sync(b + RH_WAIT, 7) || !rh_sync(b + RH_ENABLE, 7) ||
++	if (!rh_sync(b + RH_WAIT, mask) || !rh_sync(b + RH_ENABLE, mask) ||
+ 	    !rh_sync(b + RH_CONTROL, 0) || !rh_sync(b + RH_CONTROL, RH_AMC_EN)) {
+ 		return EIO;
+ 	}
+@@ -303,7 +314,7 @@ rh_send(uint32_t address, unsigned mv)
+ 		irq = rh_read(rh_tcs, RH_IRQ_STATUS);
+ 		idle = rh_read(rh_tcs, b + RH_STATUS);
+ 		bool complete = true;
+-		for (unsigned c = 0; c < 3; ++c) {
++		for (unsigned c = 0; c < n; ++c) {
+ 			status[c] = rh_read(rh_tcs, b + RH_CMD_STATUS + c * RH_CMD_STRIDE);
+ 			complete &= status[c] != 0xffffffffu &&
+ 			    (status[c] & (RH_ISSUED | RH_COMPLETE)) == (RH_ISSUED | RH_COMPLETE);
+@@ -363,10 +374,13 @@ sweet_rpmh_vreg_enable(const char *res, unsigned mv)
+ 	}
+ 	error = rh_map();
+ 	if (!error) {
+-		error = rh_lookup(res, &address);
++		error = rh_lookup(res, RH_VRM, &address, NULL, NULL);
+ 	}
+ 	if (!error) {
+-		error = rh_send(address, mv);
++		/* HPM (raw 7) is supported by this PMIC5 LDO; enable comes last. */
++		const uint32_t offsets[3] = {0, 8, 4};
++		const uint32_t values[3] = {mv, 7, 1};
++		error = rh_send(address, 3, offsets, values);
+ 	}
+ out:
+ 	if (error) {
+@@ -375,4 +389,60 @@ out:
+ 	__atomic_store_n(&rh_lock, 0, __ATOMIC_RELEASE);
+ 	return error;
+ }
++/*
++ * ARC (slave 3) corner vote, Linux rpmhpd: the cmd-db aux data of "cx.lvl"/"mx.lvl" is
++ * a table of 16-bit voltage levels (RPMH_REGULATOR_LEVEL_*), and the vote is the index
++ * (hlvl) of the first entry >= the wanted level. Spacewar: the WPSS proxy votes vdd_cx and
++ * vdd_mx at 384 (TURBO) before it is started (SweetWpss.cpp).
++ */
++int
++sweet_rpmh_arc_vote(const char *res, unsigned level)
++{
++	if (!res || (strcmp(res, "cx.lvl") && strcmp(res, "mx.lvl")) || level > 416) {
++		printf("SWEET RPMH: unexpected ARC vote %s %u\n", res ? res : "(null)", level);
++		return EINVAL;
++	}
++	if (__atomic_exchange_n(&rh_lock, 1, __ATOMIC_ACQUIRE)) {
++		return EBUSY;
++	}
++	int error = EIO;
++	uint32_t address = 0, aux_off = 0, aux_len = 0;
++	if (rh_poisoned) {
++		printf("SWEET RPMH: previous uncertain transaction; refusing further access\n");
++		goto out;
++	}
++	error = rh_map();
++	if (!error) {
++		error = rh_lookup(res, RH_ARC, &address, &aux_off, &aux_len);
++	}
++	if (!error) {
++		unsigned count = aux_len / 2, hlvl = count;
++		char table[96];
++		size_t len = 0;
++		table[0] = '\0';
++		for (unsigned i = 0; i < count && i < 16; ++i) {
++			unsigned v = rh_db16(aux_off + 2 * i);
++			if (len + 6 < sizeof(table)) {
++				len += (size_t)snprintf(table + len, sizeof(table) - len, " %u", v);
++			}
++			if (hlvl == count && v >= level) {
++				hlvl = i;
++			}
++		}
++		printf("SWEET RPMH: %s levels:%s -> hlvl %u for %u\n", res, table, hlvl, level);
++		if (hlvl >= count) {
++			error = ERANGE;
++		} else {
++			const uint32_t offsets[1] = {0};
++			const uint32_t values[1] = {hlvl};
++			error = rh_send(address, 1, offsets, values);
++		}
++	}
++out:
++	if (error) {
++		printf("SWEET RPMH: ARC vote %s failed errno=%d\n", res, error);
++	}
++	__atomic_store_n(&rh_lock, 0, __ATOMIC_RELEASE);
++	return error;
++}
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/iokit/Kernel/arm/SweetWpss.cpp b/iokit/Kernel/arm/SweetWpss.cpp
+index 0d2b4cdef397..b6d0d8dc2dae 100644
+--- a/iokit/Kernel/arm/SweetWpss.cpp
++++ b/iokit/Kernel/arm/SweetWpss.cpp
+@@ -20,7 +20,8 @@
+  * write-combined, the carveout is mapped only while copying, the DSP must start cold,
+  * polling only (no interrupts). Before auth_and_reset the AOP is told "load_state wpss on"
+  * over QMP (Linux qcom_q6v5_prepare(); DT qcom,signal-aop). 0110 booted the WPSS without it
+- * and it never created its SMP2P item. Not done: the cx/mx (vdd_cx/vdd_mx level 384) votes.
++ * and it never created its SMP2P item; 0111 (with the AOP message acked) neither. Then the
++ * Android proxy votes: vdd_cx and vdd_mx at level 384 (TURBO), as RPMh ARC votes cx.lvl/mx.lvl.
+  */
+ #include <pexpert/arm64/board_config.h>
+ 
+@@ -34,6 +35,7 @@
+ #include <sys/proc.h>
+ 
+ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++extern "C" int sweet_rpmh_arc_vote(const char *res, unsigned level);   /* bsd/dev/sweet_rpmh.c */
+ 
+ #define LOG(fmt, ...)       IOLog("SWEET WPSS: " fmt "\n", ##__VA_ARGS__)
+ 
+@@ -359,6 +361,35 @@ smem_alloc(struct smem_part_hdr *p, uint16_t item, uint32_t size)
+ 	return v;
+ }
+ 
++/* Log the item ids present in a partition (what the remote has created so far). */
++static void
++smem_list(struct smem_part_hdr *p, const char *what)
++{
++	char line[200];
++	size_t len = 0;
++	unsigned n = 0;
++
++	line[0] = '\0';
++	if (p == NULL || memcmp(p->magic, "$PRT", 4) != 0 || p->free_uncached > p->size) {
++		LOG("SMEM %s: no valid partition", what);
++		return;
++	}
++	uint8_t *e = (uint8_t *)p + sizeof(*p), *end = (uint8_t *)p + p->free_uncached;
++	while (e + sizeof(struct smem_priv_entry) <= end) {
++		struct smem_priv_entry *h = (struct smem_priv_entry *)e;
++		if (h->canary != 0xA5A5) {
++			break;
++		}
++		if (len + 8 < sizeof(line)) {
++			len += (size_t)snprintf(line + len, sizeof(line) - len, " %u", h->item);
++		}
++		n++;
++		e += sizeof(*h) + h->pad_hdr + h->size;
++	}
++	LOG("SMEM %s: %u items (hosts %u/%u, used %#x of %#x):%s", what, n, p->host0, p->host1,
++	    p->free_uncached, p->size, line);
++}
++
+ /* ---------------------------------------------------------------- SMP2P */
+ 
+ /* qcom-ipcc: SEND_ID = client id (31:16) | signal id (15:0) rings the remote's doorbell */
+@@ -457,6 +488,16 @@ wpss_watch(struct smem_part_hdr *part, unsigned seconds)
+ 		IOSleep(1);
+ 	}
+ 	LOG("watch done: slave-kernel %08x, %s", sk_last, ready ? "READY" : "NOT ready");
++	smem_list(part, "apps<->wpss");
++	{
++		uint32_t sz = 0;
++		const char *why = (const char *)smem_get(smem_partition(SMEM_GLOBAL_HOST, SMEM_GLOBAL_HOST), ITEM_WPSS_CRASH, &sz);
++		char buf[96] = {};
++		if (why != NULL) {
++			memcpy(buf, why, MIN(sz, (uint32_t)sizeof(buf) - 1));
++		}
++		LOG("global item %u (crash reason): %s", ITEM_WPSS_CRASH, why != NULL ? buf : "(absent)");
++	}
+ }
+ 
+ /* ---------------------------------------------------------------- AOP QMP */
+@@ -558,6 +599,7 @@ wpss_boot(void)
+ 
+ 	struct smem_part_hdr *part = smem_partition(0, WPSS_REMOTE_PID);
+ 	LOG("SMEM apps<->wpss partition %p", part);
++	smem_list(part, "apps<->wpss (before)");
+ 	if (part == NULL) {
+ 		return false;
+ 	}
+@@ -696,6 +738,9 @@ wpss_boot(void)
+ 			    qmp_send(off, "{class: image, res: load_state, name: wpss, val: on}");
+ 			LOG("AOP load_state wpss on: %s", sent ? "acked" : "FAILED (continuing)");
+ 		}
++		/* DT qcom,proxy-reg-names vdd_cx vdd_mx, qcom,vdd_*-uV-uA <384 100000> */
++		LOG("ARC cx.lvl 384: %d", sweet_rpmh_arc_vote("cx.lvl", 384));
++		LOG("ARC mx.lvl 384: %d", sweet_rpmh_arc_vote("mx.lvl", 384));
+ 
+ 		st = scm(SCM_FN(SCM_SVC_PIL, PIL_AUTH_RESET), 1, PAS_ID_WPSS, 0, 0, &res);
+ 		LOG("auth_and_reset: ret=%llx res=%llx resumes=%u", st, res, scm_resumes);
