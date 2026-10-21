@@ -1191,3 +1191,9 @@ proxy vdd_cx/vdd_mx at level 0x180 = 384 (TURBO), proxy clock xo, qcom,signal-ao
 xnu 0111 (CI 39623973363): AOP QMP (qcom,qmp-aop@c300000, ipcc client 0 signal 0, Linux qcom_aoss.c
 link/channel handshake, 64-byte message) "{class: image, res: load_state, name: wpss, val: on}" right
 before auth_and_reset. Next if still silent: ARC votes cx.lvl/mx.lvl (sweet_rpmh.c only does VRM now).
+0111 RESULT: QMP magic 0x4d41494c v1, mbox 0x128+0x2d8, ucore link 0xffff (up) ch 0xffff0000; handshake
+OK and "AOP load_state wpss on: acked"; firmware accepted again; WPSS still never creates item 616.
+xnu 0112 (CI 39626083448): sweet_rpmh.c generalized (rh_lookup(slave), rh_send(n cmds); LDO votes unchanged:
+same 3 cmds) + sweet_rpmh_arc_vote("cx.lvl"/"mx.lvl", level) = first hlvl in the cmd-db aux table with
+level >= wanted (rpmhpd); WPSS votes both at 384 after the QMP message, before auth_and_reset; logs the
+level tables. Diagnostics: SMEM item list of the apps<->wpss partition before and after, global item 626.
