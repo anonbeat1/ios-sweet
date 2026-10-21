@@ -1,0 +1,25 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 22dbfd1ceba2..e687d8fbbcf2 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5612,6 +5612,20 @@ sweet_exec_insert(const char *path)
+ 		}
+ 		parsed = 1;
+ 	}
++	if (names[0] == '\0' || path == NULL) {
++		return NULL;
++	}
++	/* sweetinsert=* : every process except the boot-critical ones (injecting a
++	 * dylib into launchd / the cache loader would risk the boot). */
++	if (names[0] == '*' && names[1] == '\0') {
++		static const char *const deny[] = { "launchd", "launchd_cache_loader" };
++		for (unsigned i = 0; i < sizeof(deny) / sizeof(deny[0]); i++) {
++			if (sweet_list_has(deny[i], path)) {
++				return NULL;
++			}
++		}
++		return lib;
++	}
+ 	return sweet_list_has(names, path) ? lib : NULL;
+ }
+ #endif
